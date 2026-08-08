@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>استديو ڤيديو كرافت — تحسين الفيديو والصور محليًا</title>
+<meta name="description" content="برنامج ويندوز عربي لتحسين الفيديو والصور محليًا عبر FFmpeg ومحرك ذكاء اصطناعي يعمل على بطاقة الرسوم. ملفاتك لا تُرفع إلى الإنترنت.">
+<link rel="icon" href="videocraft.svg">
+<meta property="og:title" content="استديو ڤيديو كرافت">
+<meta property="og:description" content="تحسين الفيديو والصور محليًا على جهازك — بلا رفع ملفات.">
+<meta property="og:image" content="design_dark.png">
+<style>
+  :root {
+    --bg: #101215;
+    --card: #191C21;
+    --line: #272A30;
+    --text: #EEEAE4;
+    --muted: #9AA0A8;
+    --accent: #F47B20;
+    --accent-soft: #FF8A24;
+    --teal: #95E5D1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", Tahoma, system-ui, sans-serif;
+    line-height: 1.75;
+    background-image:
+      radial-gradient(900px 420px at 85% -8%, rgba(244,123,32,.16), transparent 62%),
+      radial-gradient(760px 380px at 8% 4%, rgba(149,229,209,.09), transparent 60%);
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 22px; }
+  a { color: var(--accent-soft); }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 18px 0; border-bottom: 1px solid var(--line);
+  }
+  header img { width: 40px; height: 40px; }
+  .brand { font-size: 19px; font-weight: 700; }
+  .brand small { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+  header nav { margin-inline-start: auto; display: flex; gap: 16px; font-size: 14px; }
+  header nav a { color: var(--muted); text-decoration: none; }
+  header nav a:hover { color: var(--text); }
+
+  .hero { padding: 62px 0 40px; text-align: center; }
+  .pill {
+    display: inline-block; padding: 5px 14px; border-radius: 999px;
+    border: 1px solid rgba(149,229,209,.35); color: var(--teal);
+    font-size: 13px; margin-bottom: 20px;
+  }
+  h1 { font-size: clamp(30px, 5.2vw, 50px); line-height: 1.25; margin: 0 0 16px; }
+  .lede { font-size: 18px; color: var(--muted); max-width: 640px; margin: 0 auto 30px; }
+
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 14px 30px; border-radius: 11px;
+    font-weight: 700; text-decoration: none; font-size: 16px;
+  }
+  .btn-main { background: var(--accent); color: #14100C; }
+  .btn-main:hover { background: var(--accent-soft); }
+  .btn-soft { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .btn-soft:hover { border-color: var(--muted); }
+  .meta { margin-top: 14px; font-size: 13px; color: var(--muted); }
+
+  .shot { margin: 46px 0 10px; }
+  .shot img {
+    width: 100%; height: auto; display: block;
+    border-radius: 14px; border: 1px solid var(--line);
+    box-shadow: 0 26px 60px rgba(0,0,0,.5);
+  }
+  .shot p { text-align: center; font-size: 13px; color: var(--muted); margin-top: 12px; }
+
+  section { padding: 46px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 26px; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 26px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 16px; color: var(--accent-soft); }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+  ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
+  ol.steps li {
+    counter-increment: s; position: relative;
+    background: var(--card); border: 1px solid var(--line); border-radius: 13px;
+    padding: 18px 68px 18px 20px; margin-bottom: 12px;
+  }
+  ol.steps li::before {
+    content: counter(s);
+    position: absolute; inset-inline-start: 20px; top: 18px;
+    width: 30px; height: 30px; border-radius: 9px;
+    background: rgba(244,123,32,.16); color: var(--accent-soft);
+    display: grid; place-items: center; font-weight: 700;
+  }
+  ol.steps b { display: block; margin-bottom: 2px; }
+  ol.steps span { color: var(--muted); font-size: 14.5px; }
+
+  code {
+    background: #0B0D10; border: 1px solid var(--line); border-radius: 7px;
+    padding: 3px 9px; font-family: Consolas, monospace; font-size: 13.5px;
+    color: var(--teal); direction: ltr; display: inline-block;
+  }
+  .note {
+    background: rgba(244,123,32,.08); border: 1px solid rgba(244,123,32,.28);
+    border-radius: 12px; padding: 16px 20px; color: var(--muted); font-size: 14.5px;
+  }
+  .note b { color: var(--text); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td { padding: 12px 4px; border-bottom: 1px solid var(--line); color: var(--muted); }
+  td:first-child { color: var(--text); font-weight: 600; width: 38%; }
+
+  footer { padding: 34px 0 50px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+  footer p { margin: 0 0 10px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <img src="videocraft.svg" alt="">
+  <div class="brand">استديو ڤيديو كرافت<small>وضوح • حركة • لمسة</small></div>
+  <nav>
+    <a href="#features">المزايا</a>
+    <a href="#install">التثبيت</a>
+    <a href="#requirements">المتطلبات</a>
+    <a href="https://github.com/yazedalabas-svg/VideoCraftStudio">الكود</a>
+  </nav>
+</header>
+
+<div class="hero">
+  <span class="pill">● يعمل محليًا — ملفاتك لا تُرفع</span>
+  <h1>من اللقطة الخام<br>إلى نسخة تشبه قرارك</h1>
+  <p class="lede">
+    برنامج ويندوز عربي يحسّن الفيديو <b>والصور</b> على جهازك عبر FFmpeg ومحرك ذكاء اصطناعي
+    يعمل على بطاقة الرسوم. لا رفع، لا اشتراك، لا انتظار في طابور خادم.
+  </p>
+  <div class="cta">
+    <a class="btn btn-main" href="https://github.com/yazedalabas-svg/VideoCraftStudio/releases/download/v1.0.0/VideoCraftStudio-v1.0.0-windows.zip">تنزيل للويندوز</a>
+    <a class="btn btn-soft" href="https://github.com/yazedalabas-svg/VideoCraftStudio">الكود المصدري</a>
+  </div>
+  <p class="meta">الإصدار v1.0.0 • 195MB • ويندوز 10/11 (64‑بت) • يشمل محرك AI ونماذجه</p>
+</div>
+
+<div class="shot">
+  <img src="design_dark.png" alt="واجهة استديو ڤيديو كرافت بالوضع الداكن">
+  <p>الواجهة بالوضع الداكن — ويمكن التبديل للفاتح من رأس البرنامج</p>
+</div>
+
+<section id="features">
+  <h2>ما الذي يفعله</h2>
+  <p class="sub">قرار واضح في كل خطوة، وقيم افتراضية محافظة حتى لا تبدو النتيجة مصطنعة.</p>
+  <div class="grid">
+    <div class="card">
+      <h3>تكبير عصبي حقيقي</h3>
+      <p>Real‑CUGAN Pro و Real‑ESRGAN و AnimeVideo AI و Anime4K GAN — تعمل عبر Vulkan على بطاقة الرسوم، لا على خادم بعيد.</p>
+    </div>
+    <div class="card">
+      <h3>الصور أيضًا</h3>
+      <p>JPG و PNG و WebP و BMP و TIFF تمرّ عبر نفس المحرك. الواجهة تتحول تلقائيًا لوضع الصور وتخفي ما لا يخصّها.</p>
+    </div>
+    <div class="card">
+      <h3>لا تصغير للصور أبدًا</h3>
+      <p>أزرار الدقة تعمل كحدٍّ أدنى لا أقصى: نكبّر الصورة الصغيرة، ولا نصغّر صورة أكبر من المقاس المختار.</p>
+    </div>
+    <div class="card">
+      <h3>حركة أنعم</h3>
+      <p>رفع معدل الإطارات حتى 120fps مع توليد إطارات بينية بنموذج RIFE 4.26 أو بتحليل الحركة التقليدي.</p>
+    </div>
+    <div class="card">
+      <h3>مقارنة قبل / بعد</h3>
+      <p>طبقتان فوق بعض بحافة سحب برتقالية، تكبير بعجلة الماوس وتحريك بالسحب — للفيديو وللصور.</p>
+    </div>
+    <div class="card">
+      <h3>تصدير موثوق</h3>
+      <p>يفحص مساحة القرص، ويعيد المحاولة تلقائيًا بمسار أكثر ثباتًا إذا فشل التسريع أو نفدت الذاكرة — بنفس الدقة وFPS.</p>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <h2>التثبيت</h2>
+  <p class="sub">ثلاث خطوات، مرة واحدة فقط.</p>
+  <ol class="steps">
+    <li>
+      <b>ثبّت Python 3.11 أو أحدث</b>
+      <span>من <a href="https://www.python.org/downloads/">python.org</a> أو من متجر مايكروسوفت.</span>
+    </li>
+    <li>
+      <b>ثبّت FFmpeg وأضفه إلى PATH</b>
+      <span>البرنامج يعتمد عليه كليًا: <code>winget install Gyan.FFmpeg</code> ثم أعد تشغيل الجهاز.</span>
+    </li>
+    <li>
+      <b>فك الضغط ثم شغّل Setup.bat مرة واحدة</b>
+      <span>بعدها افتح <code>VideoCraftStudio.exe</code> في أي وقت.</span>
+    </li>
+  </ol>
+  <div class="note">
+    <b>تنبيه:</b> ويندوز قد يعرض تحذير SmartScreen لأن الملف غير موقّع رقميًا.
+    اضغط «مزيد من المعلومات» ← «تشغيل على أي حال».
+  </div>
+</section>
+
+<section id="requirements">
+  <h2>المتطلبات</h2>
+  <p class="sub">محرك AI اختياري: بدون بطاقة متوافقة يعمل البرنامج بالمسار التقليدي بنفس الدقة وFPS.</p>
+  <table>
+    <tr><td>نظام التشغيل</td><td>ويندوز 10 أو 11 (64‑بت)</td></tr>
+    <tr><td>Python</td><td>3.11 أو أحدث</td></tr>
+    <tr><td>FFmpeg</td><td>مطلوب، مضاف إلى PATH</td></tr>
+    <tr><td>بطاقة الرسوم</td><td>NVIDIA بدعم Vulkan — جُرّب على GTX 1650</td></tr>
+    <tr><td>المساحة</td><td>~700MB بعد فك الضغط، بالإضافة لمساحة التصدير</td></tr>
+  </table>
+</section>
+
+<footer>
+  <p>
+    يتضمن البرنامج أدوات مفتوحة المصدر من أطراف ثالثة، لكلٍّ ترخيصه الخاص:
+    <a href="https://github.com/k4yt3x/video2x">Video2X</a> ·
+    <a href="https://ffmpeg.org">FFmpeg</a> ·
+    <a href="https://github.com/xinntao/Real-ESRGAN">Real‑ESRGAN</a> ·
+    <a href="https://github.com/bilibili/ailab">Real‑CUGAN</a> ·
+    <a href="https://github.com/hzwer/Practical-RIFE">RIFE</a> ·
+    <a href="https://github.com/bloc97/Anime4K">Anime4K</a>
+  </p>
+  <p>المعالجة كلها تتم على جهازك. لا يرسل البرنامج أي ملف أو بيانات إلى أي خادم.</p>
+</footer>
+
+</div>
+</body>
+</html>
