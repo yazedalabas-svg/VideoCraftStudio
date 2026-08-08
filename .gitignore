@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+launcher/bin/
+launcher/obj/
+ui_preview.png
+.claude/settings.local.json
