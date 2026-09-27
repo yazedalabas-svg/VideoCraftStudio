@@ -100,7 +100,29 @@ def parse_ffmpeg_info(text: str, path: Path, size_bytes: int) -> MediaInfo:
     )
 
 
+# e.g. "yuv420p10le(tv, bt2020nc/bt2020/arib-std-b67, progressive)" → transfer = arib-std-b67
+_COLOR_RE = re.compile(r"\((?:tv|pc), ([\w-]+)/([\w-]+)/([\w-]+)")
+HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}  # PQ (HDR10 / Dolby Vision) and HLG (phones)
+
+
+def hdr_transfer(text: str) -> str | None:
+    """The HDR transfer of the first video stream ("arib-std-b67" = HLG, "smpte2084" = PQ), else None."""
+    video = _VIDEO_RE.search(text)
+    match = video and _COLOR_RE.search(video.group(0))
+    return match.group(3) if match and match.group(3) in HDR_TRANSFERS else None
+
+
+def is_hdr(text: str) -> bool:
+    """True when the first video stream uses an HDR transfer (needs tone mapping to look right)."""
+    return hdr_transfer(text) is not None
+
+
 def probe(path: Path) -> MediaInfo:
+    return probe_details(path)[0]
+
+
+def probe_details(path: Path) -> tuple[MediaInfo, dict]:
+    """MediaInfo plus extras the engine's dataclass doesn't carry: {"hdr": bool, "transfer": str | None}."""
     ffmpeg = ensure_ffmpeg()
     if not ffmpeg:
         raise VideoEngineError("محرك FFmpeg غير متوفر على الخادم.")
@@ -117,4 +139,6 @@ def probe(path: Path) -> MediaInfo:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise VideoEngineError(f"تعذّر قراءة الملف: {exc}") from exc
     # `ffmpeg -i` with no output always exits 1; the banner is what we need.
-    return parse_ffmpeg_info(result.stderr, path, path.stat().st_size)
+    info = parse_ffmpeg_info(result.stderr, path, path.stat().st_size)
+    transfer = None if info.is_image else hdr_transfer(result.stderr)
+    return info, {"hdr": transfer is not None, "transfer": transfer}

@@ -25,21 +25,47 @@ from video_engine import (
     IMAGE_SUFFIXES,
     MediaInfo,
     VideoEngineError,
-    build_ffmpeg_command,
+    build_audio_filters,
     build_image_ffmpeg_command,
+    build_video_filters,
+    find_binary,
 )
 
 from . import media
 
 # --- Limits (override with environment variables on Render) -------------------
 
-MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "200"))
-MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "180"))
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "4096"))
+MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))
 MAX_IMAGE_MEGAPIXELS = int(os.environ.get("MAX_IMAGE_MEGAPIXELS", "40"))
 # Upscaled output is capped so a ×4 of a big photo can't exhaust the 512 MB instance.
 MAX_OUTPUT_MEGAPIXELS = int(os.environ.get("MAX_OUTPUT_MEGAPIXELS", "36"))
 MAX_QUEUE = int(os.environ.get("MAX_QUEUE", "5"))
+# A job may take this long at least, or 40× the clip length for long clips on the tiny CPU.
 JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT_SECONDS", "2700"))
+# The input, a temporary copy (heavy sources) and the output live on disk while a job runs.
+DISK_HEADROOM = 2.5
+
+
+def server_memory_mb() -> int:
+    """Memory this instance may use: MEMORY_LIMIT_MB, else the container's cgroup limit."""
+    if os.environ.get("MEMORY_LIMIT_MB", "").isdigit():
+        return int(os.environ["MEMORY_LIMIT_MB"])
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            value = Path(path).read_text().strip()
+        except OSError:
+            continue
+        if value.isdigit() and int(value) < 1 << 50:  # "max" / huge = no limit set
+            return int(value) // (1024 * 1024)
+    if os.environ.get("RENDER"):  # on Render without a readable limit: assume the free plan
+        return 512
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // (1024 * 1024)
+
+
+# Encoding 4K video peaked at ~1.1 GB even with every trick here, so 4K *video* output
+# is offered only on instances with room for it (e.g. Render Standard, 2 GB).
+VIDEO_4K_OK = server_memory_mb() >= 1500
 RESULT_TTL = int(os.environ.get("RESULT_TTL_SECONDS", "3600"))
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".3gp", ".mts", ".ts", ".wmv", ".flv", ".gif"}
@@ -75,6 +101,8 @@ class Job:
     info: dict = field(default_factory=dict)
     created: float = field(default_factory=time.time)
     finished: float | None = None
+    eta: int | None = None  # seconds left, estimated from the encoding speed
+    kill: object = None  # stops every FFmpeg process of the running job
     process: subprocess.Popen | None = None
     cancel_requested: bool = False
 
@@ -89,6 +117,7 @@ class Job:
             "filename": self.filename,
             "download_name": self.download_name,
             "queue_position": position,
+            "eta": self.eta if self.status == "running" else None,
         }
 
 
@@ -170,16 +199,119 @@ def upscale_size(info: MediaInfo, choice) -> tuple[int, int] | None:
     return width, height
 
 
-def _fast_server_preset(command: list[str]) -> list[str]:
-    """The desktop presets assume a big CPU; on a tiny server 'veryfast' keeps jobs finishing."""
-    command = list(command)
-    if "-preset" in command:
-        i = command.index("-preset")
-        command[i + 1] = "veryfast"
-        # Fewer x264 threads and a short look-ahead keep 2K/4K frames inside the
-        # 512 MB instance; with a fraction of a CPU, more threads wouldn't be faster anyway.
-        command[i + 2:i + 2] = ["-threads", "2", "-x264-params", "rc-lookahead=10"]
-    return command
+# HDR (HLG / PQ) → SDR BT.709. Without this, phone HDR videos come out washed out
+# and wrongly tagged. Raw frames arrive through a pipe without colour metadata, so
+# setparams stamps the source's HDR properties back on before zscale converts them.
+def tonemap_filter(transfer: str, light: bool = False) -> str:
+    """Filmic tone mapping (float frames), or a direct transfer conversion when `light`.
+
+    The light path is for 4K HDR sources: at that size the float path peaked at ~455 MB
+    in the decoding process alone (vs ~265 MB), which doesn't fit the 512 MB instance.
+    HLG (what phones record) is designed to survive this; PQ may look a little flatter.
+    """
+    params = f"setparams=color_primaries=bt2020:color_trc={transfer}:colorspace=bt2020nc:range=tv,"
+    if light:
+        return params + "zscale=t=bt709:p=bt709:m=bt709:r=tv:dither=none,format=yuv420p"
+    return (
+        f"setparams=color_primaries=bt2020:color_trc={transfer}:colorspace=bt2020nc:range=tv,"
+        "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+        "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+    )
+
+
+# x264 settings measured for the 512 MB instance: a 5-frame look-ahead and 2 B-frames
+# keep quality and file size (SSIM 0.996, same size as the defaults) at ~215 MB instead
+# of ~300 MB; one thread is as fast as more on a fraction of a CPU.
+X264_LEAN = "threads=1:rc-lookahead=5:bframes=2"
+# Bigger than ~1.5× 1080p: decoding alone takes most of the memory budget.
+HEAVY_SOURCE_PIXELS = 1920 * 1080 * 3 // 2
+
+
+def server_video_pipeline(
+    source, output, info: MediaInfo, settings: ExportSettings, transfer: str | None, audio_source=None
+) -> list[list[str]]:
+    """FFmpeg processes joined by pipes: decode + filters → encode (HDR: decode → tone map + filters → encode).
+
+    Fitted to a 512 MB / fraction-of-a-CPU server:
+    - Frames are shrunk to the output box right after decoding, so denoise, colour,
+      frame interpolation and encoding never work on 4K phone frames. "source" means
+      "keep the size, up to 1080p" on the server; 2K/4K only when asked for.
+    - HDR (HLG / PQ) is tone-mapped to SDR and tagged BT.709.
+    - Separate processes: inside one process FFmpeg 7 lets a fast stage run ahead of
+      a slow one and queues hundreds of MB of frames (a 4K HEVC clip peaked at 1.2 GB
+      and got the instance killed). Pipes cap each queue at 64 KB.
+    - The encoder uses X264_LEAN; one thread is as fast as more on a fraction of a CPU.
+    """
+    ffmpeg = find_binary("ffmpeg")
+    long_side, short_side = PRESET_BOXES.get(settings.resolution, PRESET_BOXES["1080p"])
+    w, h = info.display_width, info.display_height
+    box_w, box_h = (short_side, long_side) if h > w else (short_side, short_side) if w == h else (long_side, short_side)
+    # Raw frames travel between processes in NUT: any pixel format (HDR keeps its
+    # 10 bits until tone mapping) and exact timestamps.
+    # FFmpeg keeps its own frame/packet queues on both sides of a pipe; with raw frames
+    # (6 MB at 1080p 10-bit) its defaults hold hundreds of MB, so both are kept tiny.
+    pipe_out = ["-c:v", "rawvideo", "-max_muxing_queue_size", "2", "-muxing_queue_data_threshold", "1", "-f", "nut", "-"]
+    pipe_in = ["-thread_queue_size", "2", "-f", "nut", "-i", "-"]
+
+    prescale = []
+    if w > box_w or h > box_h:
+        prescale = [f"scale=w={box_w}:h={box_h}:force_original_aspect_ratio=decrease:"
+                    "force_divisible_by=2:flags=bicubic"]
+    filters = build_video_filters(info, settings) + ["format=yuv420p"]
+    decode = [ffmpeg, "-hide_banner", "-nostdin", "-threads", "1", "-i", str(source), "-map", "0:v:0", "-filter_threads", "1"]
+
+    # Measured on a 1080p HLG HEVC clip: tone mapping in the decoding process peaks at
+    # far less than giving it its own process (every extra process holds its own copies).
+    tone = [tonemap_filter(transfer)] if transfer else []
+    decode += ["-vf", ",".join(prescale + tone + filters), *pipe_out]
+    stages = [decode]
+
+    quality = max(14, min(30, int(settings.quality)))
+    encode = [
+        ffmpeg, "-hide_banner", "-nostdin", "-y",
+        *pipe_in,
+        "-i", str(audio_source or source),  # audio, metadata and chapters come from the original
+        "-map", "0:v:0", "-map", "1:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(quality), "-x264-params", X264_LEAN,
+        "-pix_fmt", "yuv420p", "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+    ]
+    audio_filters = build_audio_filters(settings)
+    if audio_filters:
+        encode += ["-af", ",".join(audio_filters)]
+    encode += [
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-map_metadata", "1", "-map_chapters", "1", "-movflags", "+faststart",
+        "-max_muxing_queue_size", "1024", "-progress", "pipe:1", "-nostats", str(output),
+    ]
+    return stages + [encode]
+
+
+def normalize_command(source, output, info: MediaInfo, resolution: str, transfer: str | None) -> list[str]:
+    """First pass for heavy sources (4K phone footage): shrink to the output box and
+    convert HDR, into a near-lossless temporary file.
+
+    Done in one go, the enhancement filters are slower than decoding, and FFmpeg
+    queues decoded 4K frames in front of them (~130 MB more). Shrinking first in a
+    fast pass keeps both passes around 300 MB on the 512 MB instance.
+    """
+    long_side, short_side = PRESET_BOXES.get(resolution, PRESET_BOXES["1080p"])
+    w, h = info.display_width, info.display_height
+    box_w, box_h = (short_side, long_side) if h > w else (short_side, short_side) if w == h else (long_side, short_side)
+    filters = [f"scale=w={box_w}:h={box_h}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bicubic"]
+    if transfer:
+        filters.append(tonemap_filter(transfer, light=True))
+    filters.append("format=yuv420p")
+    return [
+        find_binary("ffmpeg"), "-hide_banner", "-nostdin", "-y", "-threads", "1", "-i", str(source),
+        "-map", "0:v:0", "-filter_threads", "1", "-vf", ",".join(filters),
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-x264-params", "threads=1",
+        "-an", "-progress", "pipe:1", "-nostats", str(output),
+    ]
+
+
+def disk_has_room(size_bytes: int) -> bool:
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
+    return shutil.disk_usage(WORK_ROOT).free > size_bytes * DISK_HEADROOM
 
 
 def _safe_stem(filename: str) -> str:
@@ -235,8 +367,8 @@ class JobManager:
         if job.status == "queued":
             self._finish(job, "cancelled", "تم الإلغاء.")
             job.source.unlink(missing_ok=True)
-        elif job.process and job.process.poll() is None:
-            job.process.kill()
+        elif job.kill:
+            job.kill()
 
     # --- worker ------------------------------------------------------------
 
@@ -245,6 +377,7 @@ class JobManager:
         job.message = message
         job.finished = time.time()
         job.process = None
+        job.kill = None
         if status == "error":
             job.progress = 0.0
 
@@ -266,7 +399,7 @@ class JobManager:
                 job.source.unlink(missing_ok=True)
 
     def _run(self, job: Job) -> None:
-        info = media.probe(job.source)
+        info, extras = media.probe_details(job.source)
         job.kind = "image" if info.is_image else "video"
         job.info = {
             "width": info.display_width,
@@ -275,17 +408,23 @@ class JobManager:
             "duration": round(info.duration, 2),
             "codec": info.video_codec,
             "has_audio": bool(info.audio_codec),
+            "hdr": extras["hdr"],
         }
 
         if info.is_image and info.width * info.height > MAX_IMAGE_MEGAPIXELS * 1_000_000:
             raise VideoEngineError(f"الصورة كبيرة جدًا (الحد {MAX_IMAGE_MEGAPIXELS} ميغابكسل).")
         if not info.is_image and info.duration > MAX_VIDEO_SECONDS:
             raise VideoEngineError(
-                f"مدة الفيديو أطول من الحد المسموح على الموقع ({MAX_VIDEO_SECONDS // 60} دقائق). "
+                f"مدة الفيديو أطول من الحد المسموح على الموقع ({MAX_VIDEO_SECONDS // 60} دقائق). قصّه أولًا، أو "
                 "للفيديوهات الطويلة استخدم نسخة ويندوز."
             )
 
         settings = settings_from_options(job.options, info)
+        if not info.is_image and settings.resolution == "4k" and not VIDEO_4K_OK:
+            raise VideoEngineError(
+                "إخراج الفيديو بدقة 4K يحتاج خادم بذاكرة 2GB أو أكثر، والخادم الحالي أصغر. "
+                "اختر 2K أو 1080p، أو استخدم نسخة ويندوز."
+            )
         big_limit = VIDEO_SECONDS_BY_RESOLUTION.get(settings.resolution)
         if not info.is_image and big_limit and info.duration > big_limit:
             raise VideoEngineError(
@@ -304,10 +443,30 @@ class JobManager:
         else:
             suffix = ".mp4"
             output = job.folder / "result.mp4"
-            command = _fast_server_preset(build_ffmpeg_command(job.source, output, info, settings))
+            command = None
+            if info.display_width * info.display_height > HEAVY_SOURCE_PIXELS:
+                # Heavy source: shrink (and convert HDR) first, then enhance the lighter file.
+                job.message = "تجهيز الفيديو (تصغير الدقة)…"
+                normalized = job.folder / "normalized.mp4"
+                self._execute(job, normalize_command(job.source, normalized, info, settings.resolution, extras["transfer"]),
+                              info.duration, span=(0.0, 0.35))
+                if job.cancel_requested:
+                    normalized.unlink(missing_ok=True)
+                    self._finish(job, "cancelled", "تم الإلغاء.")
+                    return
+                light_info = media.probe(normalized)
+                command = server_video_pipeline(normalized, output, light_info, settings, None, audio_source=job.source)
+                span = (0.35, 1.0)
+            else:
+                command = server_video_pipeline(job.source, output, info, settings, extras["transfer"])
+                span = (0.0, 1.0)
 
         job.message = "جاري التحسين…"
-        self._execute(job, command, info.duration)
+        if info.is_image:
+            self._execute(job, command, info.duration)
+        else:
+            self._execute(job, command, info.duration, span=span)
+            (job.folder / "normalized.mp4").unlink(missing_ok=True)
 
         if job.cancel_requested:
             output.unlink(missing_ok=True)
@@ -321,37 +480,70 @@ class JobManager:
         job.progress = 1.0
         self._finish(job, "done", "جاهز للتحميل.")
 
-    def _execute(self, job: Job, command: list[str], duration: float) -> None:
-        log_path = job.folder / "ffmpeg.log"
-        with open(log_path, "w", encoding="utf-8", errors="replace") as log:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=log,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            job.process = process
-            timer = threading.Timer(JOB_TIMEOUT, process.kill)
+    def _execute(self, job: Job, command, duration: float, span: tuple[float, float] = (0.0, 1.0)) -> None:
+        """Run one FFmpeg command, or a pipeline (list of commands joined by pipes).
+
+        The last command reports progress on stdout (-progress pipe:1).
+        """
+        stages = command if command and isinstance(command[0], list) else [command]
+        logs = [job.folder / f"ffmpeg{i}.log" for i in range(len(stages))]
+        processes: list[subprocess.Popen] = []
+        handles = [open(path, "w", encoding="utf-8", errors="replace") for path in logs]
+        try:
+            previous = None
+            for i, argv in enumerate(stages):
+                last = i == len(stages) - 1
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=previous.stdout if previous else subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=handles[i],
+                    text=last,
+                    encoding="utf-8" if last else None,
+                    errors="replace" if last else None,
+                )
+                if previous:
+                    previous.stdout.close()  # the next stage owns the pipe now
+                processes.append(proc)
+                previous = proc
+
+            def kill_all():
+                for proc in processes:
+                    if proc.poll() is None:
+                        proc.kill()
+
+            job.process = processes[-1]
+            job.kill = kill_all
+            timer = threading.Timer(max(JOB_TIMEOUT, duration * 40), kill_all)
             timer.start()
+            started = time.time()
             try:
-                assert process.stdout is not None
-                for line in process.stdout:
+                for line in processes[-1].stdout:
                     key, _, value = line.strip().partition("=")
                     if key == "out_time_us" and duration > 0 and value.isdigit():
-                        job.progress = max(0.0, min(0.99, int(value) / 1_000_000 / duration))
-                process.wait()
+                        done = max(0.0, min(1.0, int(value) / 1_000_000 / duration))
+                        job.progress = min(0.99, span[0] + done * (span[1] - span[0]))
+                        if done > 0.02:  # enough to estimate the speed of this pass
+                            left = (time.time() - started) * (1 - done) / done
+                            later = (1 - span[1]) / max(0.01, span[1] - span[0]) * (time.time() - started) / done
+                            job.eta = int(left + later)
+                for proc in processes:
+                    proc.wait()
             finally:
                 timer.cancel()
+        finally:
+            for handle in handles:
+                handle.close()
 
         if job.cancel_requested:
             return
-        if process.returncode != 0:
-            tail = log_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-3:]
-            if process.returncode in (-9, 137):
+        # When a later stage dies, the earlier ones fail on a broken pipe, so the
+        # last failing stage is the one with the real error.
+        failed = next((i for i in reversed(range(len(processes))) if processes[i].returncode != 0), None)
+        if failed is not None:
+            if any(proc.returncode in (-9, 137) for proc in processes):
                 raise VideoEngineError("استغرقت المعالجة وقتًا أطول من المسموح. جرّب ملفًا أقصر أو دقة أقل.")
+            tail = logs[failed].read_text(encoding="utf-8", errors="replace").strip().splitlines()[-3:]
             raise VideoEngineError("فشلت المعالجة: " + (" ".join(tail)[-300:] or "خطأ غير معروف"))
 
     # --- cleanup -------------------------------------------------------------

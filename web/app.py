@@ -62,6 +62,7 @@ async def config(_: Request) -> JSONResponse:
             "image_resolutions": list(jobs.IMAGE_RESOLUTIONS),
             "image_upscales": list(jobs.IMAGE_UPSCALES),
             "video_seconds_by_resolution": jobs.VIDEO_SECONDS_BY_RESOLUTION,
+            "video_4k": jobs.VIDEO_4K_OK,
             "max_output_megapixels": jobs.MAX_OUTPUT_MEGAPIXELS,
             "accept": sorted(jobs.ALLOWED_SUFFIXES),
             "ffmpeg": bool(FFMPEG),
@@ -87,7 +88,9 @@ async def create_job(request: Request) -> JSONResponse:
     limit = jobs.MAX_UPLOAD_MB * 1024 * 1024
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > limit:
-        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB} ميغابايت).", 413)
+        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB // 1024} غيغابايت).", 413)
+    if declared and declared.isdigit() and not jobs.disk_has_room(int(declared)):
+        return error("مساحة الخادم ما تكفي لهذا الملف الآن. جرّب ملفًا أصغر أو بعد شوي.", 507)
 
     try:
         job_id, source = manager.new_upload(filename)
@@ -123,7 +126,7 @@ async def create_job(request: Request) -> JSONResponse:
 # requests, so files go up in small chunks. Each chunk is idempotent: re-sending the same
 # offset overwrites the same bytes, and the reply always says how much the server has.
 
-CHUNK_SIZE = 1024 * 1024  # what the browser sends per request
+CHUNK_SIZE = 4 * 1024 * 1024  # what the browser sends per request (fewer round trips for GB files)
 MAX_CHUNK = 8 * 1024 * 1024  # what the server accepts per request
 UPLOADS: dict[str, dict] = {}  # upload id (= future job id) → {"source", "filename", "size"}
 
@@ -151,7 +154,9 @@ async def upload_start(request: Request) -> JSONResponse:
     if not size.isdigit() or int(size) == 0:
         return error("الملف فارغ.", 400)
     if int(size) > jobs.MAX_UPLOAD_MB * 1024 * 1024:
-        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB} ميغابايت).", 413)
+        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB // 1024} غيغابايت).", 413)
+    if not jobs.disk_has_room(int(size)):
+        return error("مساحة الخادم ما تكفي لهذا الملف الآن. جرّب ملفًا أصغر أو بعد شوي.", 507)
     try:
         upload_id, source = manager.new_upload(filename)
     except jobs.QueueFull:

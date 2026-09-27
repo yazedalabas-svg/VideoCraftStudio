@@ -31,13 +31,15 @@
   };
 
   // ---------- State ----------
-  let config = { max_upload_mb: 200, max_video_seconds: 180, video_resolutions: ["source", "1080p"], image_resolutions: ["source", "1080p", "2k", "4k"] };
+  let config = { max_upload_mb: 4096, max_video_seconds: 300, video_resolutions: ["source", "1080p", "2k", "4k"], image_resolutions: ["source", "1080p", "2k", "4k"], video_4k: false };
+  const sizeLabel = (mb) => (mb >= 1024 ? `${+(mb / 1024).toFixed(1)} غيغابايت` : `${mb} ميغابايت`);
   let file = null;
   let kind = "video";
   let sourceUrl = null;
   let jobId = null;
   let pollTimer = null;
   let imageSize = null; // natural size of the picked image, for the upscale preview
+  let videoDuration = 0; // seconds, when the browser can read it (checked before uploading)
   let aiAbort = null; // AbortController while the in-browser AI is running
   let aiInfo = ""; // e.g. "Real-CUGAN ×4 • webgpu", shown with the result
   let localResultUrl = null; // blob: URL of a result made on this device (AI mode)
@@ -47,8 +49,24 @@
 
   // ---------- Views ----------
   const views = ["pick", "setup", "work", "done", "failed"];
+  // Phones pause pages when the screen turns off, which stalls long uploads; keep it
+  // on while working (Screen Wake Lock, where supported).
+  let wakeLock = null;
+  async function keepAwake(on) {
+    try {
+      if (on && !wakeLock && navigator.wakeLock) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      } else if (!on && wakeLock) {
+        await wakeLock.release();
+      }
+    } catch { /* not allowed right now; uploads still resume on their own */ }
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && !$("work").hidden) keepAwake(true); });
+
   function show(view) {
     views.forEach((v) => { $(v).hidden = v !== view; });
+    keepAwake(view === "work");
     const heading = $(view).querySelector("h1, h2");
     if (heading && view !== "pick") { heading.tabIndex = -1; heading.focus({ preventScroll: false }); }
   }
@@ -58,7 +76,7 @@
     .then((r) => (r.ok ? r.json() : Promise.reject()))
     .then((c) => {
       config = c;
-      $("limits").textContent = `فيديو حتى ${Math.round(c.max_video_seconds / 60)} دقائق أو صورة • حتى ${c.max_upload_mb} ميغابايت`;
+      $("limits").textContent = `فيديو حتى ${Math.round(c.max_video_seconds / 60)} دقائق أو صورة • حتى ${sizeLabel(c.max_upload_mb)}`;
       if (!c.ffmpeg) showPickError("خدمة المعالجة غير متاحة الآن. حاول لاحقًا.");
     })
     .catch(() => { $("limits").textContent = "فيديو أو صورة"; });
@@ -77,7 +95,7 @@
     const isImage = f.type.startsWith("image/") || IMAGE_EXT.includes(ext(f.name));
     const isVideo = f.type.startsWith("video/") || (config.accept || []).includes(ext(f.name));
     if (!isImage && !isVideo) return showPickError("نوع الملف غير مدعوم. اختر فيديو أو صورة.");
-    if (f.size > config.max_upload_mb * 1024 * 1024) return showPickError(`الملف أكبر من ${config.max_upload_mb} ميغابايت.`);
+    if (f.size > config.max_upload_mb * 1024 * 1024) return showPickError(`الملف أكبر من ${sizeLabel(config.max_upload_mb)}.`);
 
     file = f;
     kind = isImage ? "image" : "video";
@@ -101,7 +119,9 @@
     if (kind === "video") {
       const probe = document.createElement("video");
       probe.preload = "metadata";
+      videoDuration = 0;
       probe.onloadedmetadata = () => {
+        videoDuration = probe.duration || 0;
         if (probe.duration > config.max_video_seconds) {
           show("pick");
           showPickError(`الفيديو أطول من ${Math.round(config.max_video_seconds / 60)} دقائق. قصّه أولًا أو استخدم نسخة ويندوز.`);
@@ -116,7 +136,13 @@
     document.querySelectorAll("[data-only]").forEach((el) => { el.hidden = el.dataset.only !== kind; });
     const res = $("resolution");
     const allowed = kind === "image" ? config.image_resolutions : config.video_resolutions;
-    res.replaceChildren(...allowed.map((v) => new Option(RES_LABELS[v] || v, v)));
+    res.replaceChildren(...allowed.map((v) => {
+      // Video on the server: "source" means up to 1080p, and 4K needs a bigger instance.
+      const label = kind === "video" && v === "source" ? "الأصلية (حتى 1080p)" : RES_LABELS[v] || v;
+      const o = new Option(label, v);
+      if (kind === "video" && v === "4k" && !config.video_4k) { o.disabled = true; o.text = "4K (يحتاج خادم أقوى)"; }
+      return o;
+    }));
     res.value = "source";
     updateResolutionHint();
     syncAiControls();
@@ -290,6 +316,15 @@
 
   async function start() {
     if (!file) return;
+    // Don't upload gigabytes just to be told the clip is too long for this resolution.
+    const limits = config.video_seconds_by_resolution || {};
+    const perRes = limits[form.elements.resolution.value];
+    if (kind === "video" && videoDuration && perRes && videoDuration > perRes) {
+      updateResolutionHint();
+      $("resolution-hint").textContent = `هذا المقطع ${Math.round(videoDuration)} ثانية، وهذه الدقة للمقاطع حتى ${perRes} ثانية. اختر 1080p.`;
+      form.elements.resolution.focus();
+      return;
+    }
     const problem = aiSizeProblem();
     if (problem) { $("upscale-size").textContent = problem; form.elements.upscale.focus(); return; }
 
@@ -444,7 +479,7 @@
         const r = await fetch(url, { method, body, signal, cache: "no-store", headers: body ? { "Content-Type": "application/octet-stream" } : {} });
         let data = null;
         try { data = await r.json(); } catch { /* proxy error page */ }
-        if (data && (r.ok || r.status < 500 || r.status === 503)) return { status: r.status, data };
+        if (data && r.status !== 502 && r.status !== 504) return { status: r.status, data };
       } catch (err) {
         if (err.name === "AbortError") throw err;
       }
@@ -546,6 +581,9 @@
 
     if (job.status === "queued") {
       setProgress(0.3, job.queue_position > 1 ? `في الطابور… ترتيبك ${job.queue_position}` : "في الطابور… يبدأ قريبًا", true);
+    } else if (job.status === "running" && job.eta) {
+      const eta = job.eta >= 90 ? `باقي تقريبًا ${Math.round(job.eta / 60)} دقيقة` : `باقي أقل من دقيقتين`;
+      setProgress(0.3 + job.progress * 0.7, `${job.message} ${Math.round(job.progress * 100)}% • ${eta}`);
     } else if (job.status === "running") {
       const indeterminate = job.kind === "image" || job.progress <= 0;
       setProgress(0.3 + job.progress * 0.7, `${job.message} ${indeterminate ? "" : Math.round(job.progress * 100) + "%"}`, indeterminate);
