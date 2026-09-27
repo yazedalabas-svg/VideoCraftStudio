@@ -1,0 +1,7 @@
+pyproject.toml
+videocraft_render_start.py
+videocraft_render_start.egg-info/PKG-INFO
+videocraft_render_start.egg-info/SOURCES.txt
+videocraft_render_start.egg-info/dependency_links.txt
+videocraft_render_start.egg-info/entry_points.txt
+videocraft_render_start.egg-info/top_level.txt

@@ -90,7 +90,7 @@
 
 أي تعديل يُدمج في فرع `main` يُنشر تلقائيًا بدون أي خطوة إضافية.
 
-**لو أنشأت الخدمة يدويًا كـ Web Service (Python):** من صفحة الخدمة ← **Settings** غيّر:
+**لو أنشأت الخدمة يدويًا كـ Web Service (Python):** تشتغل حتى لو كان Start Command هو `0`، لأن `requirements.txt` يثبّت على لينكس أمرًا بهذا الاسم يشغّل `server.py` (من مجلد `deploy/render_start`). والأفضل تضبط الإعدادات من **Settings**:
 - **Build Command:** `true` (ما نحتاج نثبّت PyQt6 على السيرفر)
 - **Start Command:** `python server.py`
 
