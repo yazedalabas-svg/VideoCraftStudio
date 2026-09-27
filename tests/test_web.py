@@ -4,8 +4,9 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+from web import jobs
 from web.jobs import settings_from_options, upscale_size
-from web.media import parse_ffmpeg_info
+from web.media import hdr_transfer, parse_ffmpeg_info
 from video_engine import MediaInfo
 
 VIDEO_BANNER = """Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'clip.mp4':
@@ -104,6 +105,60 @@ class UpscaleSizeTests(unittest.TestCase):
     def test_none_and_junk(self):
         self.assertIsNone(upscale_size(self._image(400, 300), "none"))
         self.assertIsNone(upscale_size(self._image(400, 300), "99"))
+
+
+HLG_BANNER = """Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'IMG_0001.MOV':
+  Duration: 00:00:08.00, start: 0.000000, bitrate: 12416 kb/s
+  Stream #0:0[0x1]: Video: hevc (Main 10) (hvc1 / 0x31637668), yuv420p10le(tv, bt2020nc/bt2020/arib-std-b67, progressive), 3840x2160, 12329 kb/s, 60 fps, 60 tbr, 15360 tbn (default)
+      Side data:
+        displaymatrix: rotation of 90.00 degrees
+  Stream #0:1[0x2]: Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 69 kb/s (default)
+"""
+
+
+class ServerVideoPipelineTests(unittest.TestCase):
+    """The server path has to fit a 512 MB instance; these pin the measured choices."""
+
+    def setUp(self):
+        self._find = unittest.mock.patch("web.jobs.find_binary", return_value="ffmpeg")
+        self._find.start()
+        self.addCleanup(self._find.stop)
+
+    def test_hdr_detection(self):
+        self.assertEqual(hdr_transfer(HLG_BANNER), "arib-std-b67")
+        self.assertIsNone(hdr_transfer(VIDEO_BANNER))
+
+    def test_4k_phone_clip_is_shrunk_first_and_tone_mapped(self):
+        info = parse_ffmpeg_info(HLG_BANNER, Path("IMG_0001.MOV"), 1)
+        self.assertGreater(info.display_width * info.display_height, jobs.HEAVY_SOURCE_PIXELS)
+        settings = settings_from_options({"resolution": "source"}, info)
+        first = jobs.normalize_command("in.mov", "norm.mp4", info, settings.resolution, "arib-std-b67")
+        vf = first[first.index("-vf") + 1]
+        self.assertTrue(vf.startswith("scale=w=1080:h=1920"))  # portrait box, before anything else
+        self.assertIn("color_trc=arib-std-b67", vf)
+        self.assertEqual(first[first.index("-threads") + 1], "1")
+
+    def test_pipeline_uses_pipes_lean_encoder_and_original_audio(self):
+        info = parse_ffmpeg_info(VIDEO_BANNER, Path("clip.mp4"), 1)  # 1080p, rotated → portrait
+        settings = settings_from_options({"resolution": "source"}, info)
+        stages = jobs.server_video_pipeline("norm.mp4", "out.mp4", info, settings, None, audio_source="orig.mp4")
+        self.assertEqual(len(stages), 2)
+        decode, encode = stages
+        self.assertEqual(decode[-3:], ["-f", "nut", "-"])
+        self.assertIn(jobs.X264_LEAN, encode)
+        self.assertIn("orig.mp4", encode)  # audio + metadata from the original upload
+        self.assertIn("1:a?", encode)
+
+    def test_hdr_1080_clip_is_tone_mapped_in_the_pipeline(self):
+        banner = HLG_BANNER.replace("3840x2160", "1920x1080")
+        info = parse_ffmpeg_info(banner, Path("a.mov"), 1)
+        settings = settings_from_options({}, info)
+        decode = jobs.server_video_pipeline("a.mov", "o.mp4", info, settings, "arib-std-b67")[0]
+        self.assertIn("tonemap=tonemap=hable", decode[decode.index("-vf") + 1])
+
+    def test_memory_limit_override(self):
+        with unittest.mock.patch.dict("os.environ", {"MEMORY_LIMIT_MB": "512"}):
+            self.assertEqual(jobs.server_memory_mb(), 512)
 
 
 try:  # the HTTP tests need httpx (Starlette's TestClient); skip them where it isn't installed
