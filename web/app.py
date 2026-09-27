@@ -5,7 +5,10 @@ Routes
   GET  /about/                the original landing page (docs/)
   GET  /healthz               health check for Render
   GET  /api/config            limits and options the UI should offer
-  POST /api/jobs              raw file body; ?filename=…&options=<json>
+  POST /api/uploads           start a resumable upload; ?filename=…&size=N
+  PUT  /api/uploads/{id}      one chunk; ?offset=N (idempotent, replies {"received": N})
+  POST /api/uploads/{id}/finish  create the job; ?options=<json>
+  POST /api/jobs              raw file body in one request; ?filename=…&options=<json>
   GET  /api/jobs/{id}         status/progress
   POST /api/jobs/{id}/cancel
   GET  /api/jobs/{id}/result  processed file (?download=1 for attachment)
@@ -58,6 +61,7 @@ async def config(_: Request) -> JSONResponse:
             "video_resolutions": list(jobs.VIDEO_RESOLUTIONS),
             "image_resolutions": list(jobs.IMAGE_RESOLUTIONS),
             "image_upscales": list(jobs.IMAGE_UPSCALES),
+            "video_seconds_by_resolution": jobs.VIDEO_SECONDS_BY_RESOLUTION,
             "max_output_megapixels": jobs.MAX_OUTPUT_MEGAPIXELS,
             "accept": sorted(jobs.ALLOWED_SUFFIXES),
             "ffmpeg": bool(FFMPEG),
@@ -111,6 +115,90 @@ async def create_job(request: Request) -> JSONResponse:
         return error("الملف فارغ.", 400)
 
     job = manager.submit(job_id, filename, source, options)
+    return JSONResponse(job.public(manager.position(job)), status_code=201)
+
+
+# ---------- Resumable uploads ----------
+# Phones on mobile data (and Render's free instance waking up or restarting) drop long
+# requests, so files go up in small chunks. Each chunk is idempotent: re-sending the same
+# offset overwrites the same bytes, and the reply always says how much the server has.
+
+CHUNK_SIZE = 1024 * 1024  # what the browser sends per request
+MAX_CHUNK = 8 * 1024 * 1024  # what the server accepts per request
+UPLOADS: dict[str, dict] = {}  # upload id (= future job id) → {"source", "filename", "size"}
+
+
+def _upload_or_none(request: Request) -> dict | None:
+    upload = UPLOADS.get(request.path_params["upload_id"])
+    if upload and not upload["source"].parent.exists():  # cleaned up by the janitor
+        UPLOADS.pop(request.path_params["upload_id"], None)
+        return None
+    return upload
+
+
+def _gone() -> JSONResponse:
+    # The instance restarted (or the upload expired): the browser starts the upload over.
+    return JSONResponse({"error": "انتهت جلسة الرفع.", "restart": True}, status_code=404)
+
+
+async def upload_start(request: Request) -> JSONResponse:
+    if not FFMPEG:
+        return error("محرك المعالجة غير متوفر على الخادم حاليًا.", 503)
+    filename = (request.query_params.get("filename") or "").strip()[:200]
+    if Path(filename).suffix.lower() not in jobs.ALLOWED_SUFFIXES:
+        return error("نوع الملف غير مدعوم.", 415)
+    size = request.query_params.get("size", "")
+    if not size.isdigit() or int(size) == 0:
+        return error("الملف فارغ.", 400)
+    if int(size) > jobs.MAX_UPLOAD_MB * 1024 * 1024:
+        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB} ميغابايت).", 413)
+    try:
+        upload_id, source = manager.new_upload(filename)
+    except jobs.QueueFull:
+        return error("الخادم مشغول بملفات أخرى الآن. حاول بعد دقائق.", 503)
+    source.touch()
+    UPLOADS[upload_id] = {"source": source, "filename": filename, "size": int(size)}
+    return JSONResponse({"upload_id": upload_id, "chunk_size": CHUNK_SIZE, "received": 0}, status_code=201)
+
+
+async def upload_chunk(request: Request) -> JSONResponse:
+    upload = _upload_or_none(request)
+    if not upload:
+        return _gone()
+    source: Path = upload["source"]
+    have = source.stat().st_size
+    offset = request.query_params.get("offset", "")
+    if not offset.isdigit() or int(offset) > have:
+        return JSONResponse({"error": "ترتيب الأجزاء غير صحيح.", "received": have}, status_code=409)
+    offset = int(offset)
+    body = await request.body()
+    if not body or len(body) > MAX_CHUNK or offset + len(body) > upload["size"]:
+        return error("جزء غير صالح.", 400)
+    with open(source, "r+b") as out:
+        out.seek(offset)
+        out.write(body)
+        out.truncate(offset + len(body))
+    return JSONResponse({"received": offset + len(body)})
+
+
+async def upload_finish(request: Request) -> JSONResponse:
+    upload_id = request.path_params["upload_id"]
+    upload = _upload_or_none(request)
+    if not upload:
+        # A retried "finish" whose first reply was lost: the job already exists.
+        job = manager.get(upload_id)
+        return JSONResponse(job.public(manager.position(job))) if job else _gone()
+    have = upload["source"].stat().st_size
+    if have != upload["size"]:
+        return JSONResponse({"error": "الملف لم يكتمل رفعه.", "received": have}, status_code=409)
+    try:
+        options = json.loads(request.query_params.get("options") or "{}")
+        if not isinstance(options, dict):
+            raise ValueError
+    except ValueError:
+        return error("إعدادات غير صالحة.", 400)
+    UPLOADS.pop(upload_id, None)
+    job = manager.submit(upload_id, upload["filename"], upload["source"], options)
     return JSONResponse(job.public(manager.position(job)), status_code=201)
 
 
@@ -197,7 +285,10 @@ routes = [
     Route("/", index),
     Route("/healthz", healthz),
     Route("/api/config", config),
-    Route("/api/jobs", create_job, methods=["POST"]),
+    Route("/api/jobs", create_job, methods=["POST"]),  # single-request upload (kept for API clients)
+    Route("/api/uploads", upload_start, methods=["POST"]),
+    Route("/api/uploads/{upload_id}", upload_chunk, methods=["PUT"]),
+    Route("/api/uploads/{upload_id}/finish", upload_finish, methods=["POST"]),
     Route("/api/jobs/{job_id}", job_status),
     Route("/api/jobs/{job_id}/cancel", job_cancel, methods=["POST"]),
     Route("/api/jobs/{job_id}/result", job_result),

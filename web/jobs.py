@@ -45,9 +45,15 @@ RESULT_TTL = int(os.environ.get("RESULT_TTL_SECONDS", "3600"))
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".3gp", ".mts", ".ts", ".wmv", ".flv", ".gif"}
 ALLOWED_SUFFIXES = VIDEO_SUFFIXES | IMAGE_SUFFIXES
 
-VIDEO_RESOLUTIONS = ("source", "1080p")
+VIDEO_RESOLUTIONS = ("source", "1080p", "2k", "4k")
 IMAGE_RESOLUTIONS = ("source", "1080p", "2k", "4k")
-IMAGE_UPSCALES = ("none", "2", "3", "4", "4k")
+IMAGE_UPSCALES = ("none", "1080p", "2k", "4k", "2", "3", "4")
+# Big video presets are heavy for the free instance, so they get shorter clips.
+VIDEO_SECONDS_BY_RESOLUTION = {
+    "2k": int(os.environ.get("MAX_VIDEO_SECONDS_2K", "90")),
+    "4k": int(os.environ.get("MAX_VIDEO_SECONDS_4K", "30")),
+}
+PRESET_BOXES = {"1080p": (1920, 1080), "2k": (2560, 1440), "4k": (3840, 2160)}
 COLOR_STYLES = ("none", "natural", "warm", "bright", "cinematic")
 
 WORK_ROOT = Path(tempfile.gettempdir()) / "videocraft-jobs"
@@ -134,16 +140,22 @@ def settings_from_options(options: dict, info: MediaInfo) -> ExportSettings:
 
 
 def upscale_size(info: MediaInfo, choice) -> tuple[int, int] | None:
-    """Exact output size for ×2/×3/×4 or "fit 4K", shrunk to fit MAX_OUTPUT_MEGAPIXELS.
+    """Exact output size for ×2/×3/×4 or "fit 1080p/2K/4K", shrunk to fit MAX_OUTPUT_MEGAPIXELS.
 
-    Never returns a size smaller than the source: upscaling only enlarges.
+    Presets follow the picture's orientation (portrait/square boxes, like the
+    desktop app). Never returns a size smaller than the source: upscaling only enlarges.
     """
     src_w, src_h = info.display_width, info.display_height
     choice = str(choice)
     if choice in ("2", "3", "4"):
         factor = float(choice)
-    elif choice == "4k":
-        box_w, box_h = (2160, 3840) if src_h > src_w else (2160, 2160) if src_w == src_h else (3840, 2160)
+    elif choice in PRESET_BOXES:
+        long_side, short_side = PRESET_BOXES[choice]
+        box_w, box_h = (
+            (short_side, long_side) if src_h > src_w
+            else (short_side, short_side) if src_w == src_h
+            else (long_side, short_side)
+        )
         factor = min(box_w / src_w, box_h / src_h)
     else:
         return None
@@ -162,7 +174,11 @@ def _fast_server_preset(command: list[str]) -> list[str]:
     """The desktop presets assume a big CPU; on a tiny server 'veryfast' keeps jobs finishing."""
     command = list(command)
     if "-preset" in command:
-        command[command.index("-preset") + 1] = "veryfast"
+        i = command.index("-preset")
+        command[i + 1] = "veryfast"
+        # Fewer x264 threads and a short look-ahead keep 2K/4K frames inside the
+        # 512 MB instance; with a fraction of a CPU, more threads wouldn't be faster anyway.
+        command[i + 2:i + 2] = ["-threads", "2", "-x264-params", "rc-lookahead=10"]
     return command
 
 
@@ -270,6 +286,12 @@ class JobManager:
             )
 
         settings = settings_from_options(job.options, info)
+        big_limit = VIDEO_SECONDS_BY_RESOLUTION.get(settings.resolution)
+        if not info.is_image and big_limit and info.duration > big_limit:
+            raise VideoEngineError(
+                f"دقة {settings.resolution.upper()} على الموقع للمقاطع حتى {big_limit} ثانية "
+                "(الخادم المجاني محدود). اختر 1080p أو استخدم نسخة ويندوز."
+            )
         stem = _safe_stem(job.filename)
         if info.is_image:
             fmt = job.options.get("image_format")
