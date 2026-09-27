@@ -79,3 +79,19 @@
 ## الخصوصية
 
 كل القراءة والمعالجة والتصدير تتم على الجهاز. لا يحتوي البرنامج على رفع سحابي أو تتبع.
+
+## نشر صفحة الموقع على Render
+
+صفحة التعريف موجودة في مجلد `docs/`، والملف `render.yaml` يجهّز نشرها كموقع ثابت مجاني:
+
+1. ادخل [dashboard.render.com](https://dashboard.render.com) ← **New** ← **Blueprint**.
+2. اربط حساب GitHub واختر المستودع `VideoCraftStudio`، ثم اضغط **Apply**.
+3. بعد دقيقة يصير الموقع شغّال على رابط مثل `https://videocraft-studio.onrender.com`.
+
+أي تعديل يُدمج في فرع `main` يُنشر تلقائيًا بدون أي خطوة إضافية.
+
+**لو أنشأت الخدمة يدويًا كـ Web Service (Python):** تشتغل حتى لو كان Start Command هو `0`، لأن `requirements.txt` يثبّت على لينكس أمرًا بهذا الاسم يشغّل `server.py` (من مجلد `deploy/render_start`). والأفضل تضبط الإعدادات من **Settings**:
+- **Build Command:** `true` (ما نحتاج نثبّت PyQt6 على السيرفر)
+- **Start Command:** `python server.py`
+
+الملف `server.py` يعرض محتوى `docs/` على المنفذ `$PORT` باستخدام مكتبات بايثون القياسية فقط.

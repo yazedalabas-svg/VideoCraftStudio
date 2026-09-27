@@ -1,0 +1,28 @@
+# Render Blueprint — deploys the VideoCraft Studio landing page (docs/) as a free static site.
+# Every push to the connected branch triggers an automatic redeploy.
+services:
+  - type: web
+    runtime: static
+    name: videocraft-studio
+    branch: main
+    autoDeploy: true
+    buildCommand: ""   # plain HTML, nothing to build
+    staticPublishPath: ./docs
+    pullRequestPreviewsEnabled: false
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*.png
+        name: Cache-Control
+        value: public, max-age=604800
+      - path: /*.svg
+        name: Cache-Control
+        value: public, max-age=604800
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -1,0 +1,18 @@
+# Tiny helper package installed only on Linux (Render) via requirements.txt.
+# It provides a console command literally named "0" because the Render
+# service's Start Command is "0"; running it starts server.py, which serves docs/.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "videocraft-render-start"
+version = "1.0.0"
+requires-python = ">=3.9"
+
+[project.scripts]
+"0" = "videocraft_render_start:main"
+"videocraft-site" = "videocraft_render_start:main"
+
+[tool.setuptools]
+py-modules = ["videocraft_render_start"]
