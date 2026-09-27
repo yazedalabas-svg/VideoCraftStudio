@@ -364,13 +364,8 @@
     $("compare-image").hidden = !isImage;
     $("compare-video").hidden = isImage;
     if (isImage) {
-      // After a page reload the original file is gone, so show the result alone.
-      $("after-img").src = url;
-      const canCompare = Boolean(sourceUrl);
-      if (canCompare) $("before-img").src = sourceUrl;
-      $("compare-image").querySelectorAll(".compare-before, .tag, input").forEach((el) => { el.hidden = !canCompare; });
-      $("compare-image").classList.toggle("is-single", !canCompare);
-      setSplit(canCompare ? 50 : 100);
+      // After a page reload the original file is gone, so the viewer shows the result alone.
+      viewer.load(url, sourceUrl);
     } else {
       $("after-video").src = url;
       const before = $("before-video");
@@ -388,11 +383,7 @@
     show("done");
   }
 
-  function setSplit(pct) {
-    $("compare-image").style.setProperty("--split", `${pct}%`);
-    $("before-wrap").style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
-  }
-  $("compare-range").addEventListener("input", (e) => setSplit(Number(e.target.value)));
+  const viewer = CompareViewer($("compare-image")); // zoom/pan + before/after (viewer.js)
 
   $("tweak").addEventListener("click", () => show("setup"));
   $("retry").addEventListener("click", () => (file ? show("setup") : resetToPick()));
