@@ -73,6 +73,7 @@
   function show(view) {
     views.forEach((v) => { $(v).hidden = v !== view; });
     keepAwake(view === "work");
+    if (view !== "done") { try { viewer.stop(); } catch { /* viewer not created yet */ } }
     const heading = $(view).querySelector("h1, h2");
     if (heading && view !== "pick") { heading.tabIndex = -1; heading.focus({ preventScroll: false }); }
   }
@@ -129,6 +130,10 @@
       $("long-note").hidden = true; // shown only once the length is known and long
       probe.onloadedmetadata = () => {
         videoDuration = probe.duration || 0;
+        if (!videoAiFits()) {
+          $("ai-status").textContent = `ℹ️ الذكاء الاصطناعي للفيديو للمقاطع حتى ${videoAiMax()} ثانية، وهذا المقطع أطول، فبيتعالج بالطريقة العادية.`;
+        }
+        syncAiControls();
         const long = videoDuration > (config.long_video_seconds || 600);
         form.elements.priority.value = long ? "speed" : "quality";
         const note = $("long-note");
@@ -256,6 +261,10 @@
     $("ai-unsupported").hidden = false;
   }
   const useAI = () => kind === "image" && AI_SUPPORTED && aiToggle.checked;
+  // Video AI: frames are upscaled on this device (web/aivideo.py). Short clips only.
+  const videoAiMax = () => (config.ai_video && config.ai_video.max_seconds) || 60;
+  const videoAiFits = () => !videoDuration || videoDuration <= videoAiMax();
+  const useVideoAI = () => kind === "video" && AI_SUPPORTED && aiToggle.checked && videoAiFits();
 
   // If AI got stuck on this device before, start with it off so nobody waits again
   // (the visitor can still switch it back on; that clears the memory).
@@ -270,13 +279,22 @@
 
   // AI always enlarges, so "كما هي" is the only choice it can't serve.
   function syncAiControls() {
-    const on = useAI();
+    const on = useAI() || useVideoAI();
     $("ai-options").hidden = !on;
+    $("ai-video-fields").hidden = kind !== "video";
     const select = form.elements.upscale;
-    [...select.options].forEach((o) => { o.disabled = on && o.value === "none"; });
-    if (on && select.value === "none") select.value = "2k";
+    [...select.options].forEach((o) => { o.disabled = useAI() && o.value === "none"; });
+    if (useAI() && select.value === "none") select.value = "2k";
     // The AI model already removes noise and restores edges; extra denoise/sharpen would only hurt.
     ["denoise", "sharpness"].forEach((k) => { form.elements[k].disabled = on; });
+    // Video AI decides size and frame rate itself; these server-only choices don't apply.
+    ["resolution", "fps", "priority"].forEach((k) => {
+      form.elements[k].closest(".field").hidden = kind !== "video" || useVideoAI();
+    });
+    form.elements.interpolate.disabled = useVideoAI();
+    $("ai-hint").textContent = kind === "video"
+      ? `نفس نماذج نسخة ويندوز على كل إطار، على كرت الشاشة في جهازك. للمقاطع حتى ${videoAiMax()} ثانية، وبإطارات ودقة خفيفة على الجوال. تقدر تسكّر الصفحة وترجع تكمل.`
+      : "نفس نماذج نسخة ويندوز، وتشتغل على كرت الشاشة في جهازك (WebGPU/WebGL)، والنتيجة تنحفظ على جهازك مباشرة بدون رفع. النموذج يتجهّز وأنت تختار الإعدادات.";
     updateUpscaleHint();
     warmUp();
   }
@@ -288,11 +306,11 @@
   let warmToken = 0;
   function warmUp() {
     const status = $("ai-status");
-    if (!useAI()) { if (!aiFailedHere()) status.textContent = ""; return; }
+    if (!useAI() && !useVideoAI()) { if (!aiFailedHere()) status.textContent = ""; return; }
     const token = ++warmToken;
     const model = form.elements.ai_model.value;
-    const plan = imageSize && aiPlan(imageSize.w, imageSize.h, form.elements.upscale.value);
-    const scale = plan && plan.scale ? plan.scale : 2;
+    const plan = kind === "image" && imageSize && aiPlan(imageSize.w, imageSize.h, form.elements.upscale.value);
+    const scale = plan && plan.scale ? plan.scale : 2; // video frames are always ×2
     VCAI.prepare(model, scale, (text) => { if (token === warmToken) status.textContent = `⏳ ${text}`; })
       .then(() => { if (token === warmToken) status.textContent = "✅ النموذج جاهز على كرت الشاشة"; })
       .catch(() => { if (token === warmToken) status.textContent = ""; }); // the real run reports errors
@@ -309,7 +327,7 @@
 
   function collectOptions() {
     const o = {};
-    ["resolution", "upscale", "ai_model", "priority", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
+    ["resolution", "upscale", "ai_model", "ai_fps", "ai_size", "priority", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
     ["interpolate", "stabilize", "deinterlace", "audio_normalize", "audio_clean"].forEach((k) => { o[k] = form.elements[k].checked; });
     return o;
   }
@@ -351,6 +369,10 @@
     resent = false;
     const options = collectOptions();
 
+    if (useVideoAI()) {
+      phase = { base: 0, span: 1 };
+      return send(file, file.name, { ...options, ai_video: true });
+    }
     if (!useAI()) {
       phase = { base: 0, span: 1 };
       return send(file, file.name, options);
@@ -560,7 +582,7 @@
     try {
       const job = await uploadFile(body, filename, options, uploadAbort.signal);
       jobId = job.id;
-      store.set({ id: jobId, kind, name: file ? file.name : filename });
+      store.set({ id: jobId, kind, name: file ? file.name : filename, aiModel: options.ai_model });
       poll();
     } catch (err) {
       if (err.name === "AbortError") return show(file ? "setup" : "pick");
@@ -598,6 +620,9 @@
     }
 
     resuming = false;
+    if (job.status === "awaiting_ai") {
+      return runAiFrames(job);
+    }
     if (job.status === "queued") {
       setProgress(0.3, job.queue_position > 1 ? `في الطابور… ترتيبك ${job.queue_position}` : "في الطابور… يبدأ قريبًا", true);
     } else if (job.status === "running" && job.eta) {
@@ -618,6 +643,84 @@
     pollTimer = setTimeout(poll, 1500);
   }
 
+  // ---------- AI video: upscale the server's frames on this device ----------
+  let framesRunning = false;
+
+  async function fetchFrame(url, signal) {
+    let wait = 1000;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const r = await fetch(url, { cache: "no-store", signal });
+        if (r.ok) return await r.blob();
+        if (r.status === 404) throw new UploadError("الإطارات ما عادت موجودة على الخادم.");
+      } catch (err) {
+        if (err.name === "AbortError" || err instanceof UploadError) throw err;
+      }
+      if (attempt >= 6) throw new UploadError("الاتصال ضعيف، ما قدرت أجيب الإطارات.");
+      await sleep(wait, signal);
+      wait = Math.min(wait * 2, 15000);
+    }
+  }
+
+  async function runAiFrames(job) {
+    if (framesRunning) return;
+    framesRunning = true;
+    const id = encodeURIComponent(job.id);
+    const saved = store.get() || {};
+    const model = saved.aiModel || form.elements.ai_model.value;
+    const label = (VCAI.MODELS[model] || VCAI.MODELS.photo).label;
+    const total = job.ai.frames;
+    aiAbort = new AbortController();
+    const signal = aiAbort.signal;
+    const started = performance.now();
+    let doneHere = 0;
+    const frameUrl = (n) => `/api/jobs/${id}/frames/${n}`;
+    try {
+      let n = job.ai.next_missing;
+      let pending = n ? fetchFrame(frameUrl(n), signal) : null;
+      setProgress(0.3, "تجهيز الذكاء الاصطناعي على جهازك…", true);
+      while (n) {
+        const blob = await pending;
+        const guess = n < total ? n + 1 : null;
+        pending = guess ? fetchFrame(frameUrl(guess), signal) : null; // download the next frame meanwhile
+        const res = await VCAI.upscale(blob, { model, scale: 2, signal });
+        const jpeg = await new Promise((ok, bad) => res.canvas.toBlob((b) => (b ? ok(b) : bad(new Error("toBlob"))), "image/jpeg", 0.92));
+        const put = await api("PUT", frameUrl(n), jpeg, signal);
+        if (put.status !== 200) throw new UploadError(put.data.error || "تعذّر رفع إطار.");
+        doneHere++;
+        const done = put.data.done;
+        const perFrame = (performance.now() - started) / doneHere / 1000;
+        const eta = etaLabel(Math.round((total - done) * perFrame));
+        setProgress(0.3 + (done / total) * 0.6, `الذكاء الاصطناعي على جهازك: إطار ${done} من ${total} • ${eta}`);
+        const next = put.data.next_missing;
+        if (next !== guess) pending = next ? fetchFrame(frameUrl(next), signal) : null;
+        n = next;
+        await sleep(15, signal); // a breath between frames keeps the phone responsive and cooler
+      }
+      const r = await api("POST", `/api/jobs/${id}/assemble`, null, signal);
+      if (r.status !== 200) throw new UploadError(r.data.error || "تعذّر تجميع الفيديو.");
+      aiInfo = `✨ ${label} ×2 على كرت الشاشة • ${job.ai.fps} إطار/ث`;
+      framesRunning = false;
+      aiAbort = null;
+      return poll();
+    } catch (err) {
+      framesRunning = false;
+      aiAbort = null;
+      if (err.name === "AbortError") {
+        try { await fetch(`/api/jobs/${id}/cancel`, { method: "POST" }); } catch { /* best effort */ }
+        jobId = null;
+        store.clear();
+        return show(file ? "setup" : "pick");
+      }
+      // AI can't run here (or the network gave up): finish the same upload the regular way.
+      console.warn("AI video failed, falling back to regular processing:", err);
+      if (!(err instanceof UploadError)) rememberAiFailed(true);
+      resultNote = "تم بالمعالجة العادية لأن الذكاء الاصطناعي ما اكتمل على هذا الجهاز.";
+      try { await api("POST", `/api/jobs/${id}/regular`, null); } catch { /* poll reports the state */ }
+      return poll();
+    }
+  }
+
   $("cancel").addEventListener("click", async () => {
     if (aiAbort) return aiAbort.abort();
     if (uploadAbort) return uploadAbort.abort();
@@ -633,32 +736,27 @@
   // ---------- 4. Result ----------
   function finish(job) {
     const url = `/api/jobs/${encodeURIComponent(job.id)}/result`;
-    showResult({ url, downloadUrl: `${url}?download=1`, downloadName: job.download_name, kind: job.kind, info: job.info || {} });
+    const before = job.has_before ? `/api/jobs/${encodeURIComponent(job.id)}/before` : null;
+    showResult({ url, downloadUrl: `${url}?download=1`, downloadName: job.download_name, kind: job.kind, info: job.info || {}, before });
   }
 
-  function showResult({ url, downloadUrl, downloadName, kind: resultKind, info }) {
+  function showResult({ url, downloadUrl, downloadName, kind: resultKind, info, before = null }) {
     const dl = $("download");
     dl.href = downloadUrl;
     dl.setAttribute("download", downloadName);
 
     const isImage = resultKind === "image";
-    $("compare-image").hidden = !isImage;
-    $("compare-video").hidden = isImage;
-    if (isImage) {
-      // After a page reload the original file is gone, so the viewer shows the result alone.
-      viewer.load(url, sourceUrl);
-    } else {
-      $("after-video").src = url;
-      const before = $("before-video");
-      before.closest("figure").hidden = !sourceUrl;
-      if (sourceUrl) { before.src = sourceUrl; before.onerror = () => { before.closest("figure").hidden = true; }; }
-    }
+    $("compare-image").hidden = false;
+    // "Before" = the server's matching clip (AI video: same frames and timing), else the
+    // original file on this device (gone after a page reload → the result shows alone).
+    viewer.load(url, before || sourceUrl, { video: !isImage });
     const upscaled = info.output_width ? ` • بعد التكبير: ${ltr(`${info.output_width}×${info.output_height}`)}` : "";
     $("done-info").textContent = info.width ? `الأصل: ${ltr(`${info.width}×${info.height}`)}${upscaled}${info.duration ? ` • ${Math.round(info.duration)} ث` : ""}` : "";
     // After an AI pass the server only saw the enlarged picture, so report the true original.
     if (aiInfo && imageSize && info.width) {
       $("done-info").textContent = `الأصل: ${ltr(`${imageSize.w}×${imageSize.h}`)} • النتيجة: ${ltr(`${info.width}×${info.height}`)} • ${aiInfo}`;
     }
+    if (aiInfo && !isImage) $("done-info").textContent += ` • ${aiInfo}`;
     if (resultNote) $("done-info").textContent += ` • ${resultNote}`;
     $("tweak").hidden = !file;
     show("done");
@@ -684,7 +782,7 @@
     file = null;
     store.clear();
     $("file").value = "";
-    ["after-video", "before-video"].forEach((id) => { const v = $(id); v.pause(); v.removeAttribute("src"); v.load(); });
+    viewer.stop();
     show("pick");
   }
 

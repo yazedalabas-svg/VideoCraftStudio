@@ -4,14 +4,22 @@
 // transform, so "before" and "after" stay pixel-aligned at every zoom level.
 // The split line lives in screen space (clip-path), so it keeps working while zoomed.
 //
+// Videos work the same way: both clips play in sync (one set of controls), so the
+// split line and zoom compare the same moment.
+//
 // Usage: const viewer = CompareViewer(document.getElementById("compare-image"));
-//        viewer.load(afterUrl, beforeUrlOrNull);
+//        viewer.load(afterUrl, beforeUrlOrNull, { video: false });
 window.CompareViewer = (root) => {
   "use strict";
 
   const view = root.querySelector(".compare");
-  const after = root.querySelector("#after-img");
-  const before = root.querySelector("#before-img");
+  const pairs = {
+    image: [root.querySelector("#after-img"), root.querySelector("#before-img")],
+    video: [root.querySelector("#after-vid"), root.querySelector("#before-vid")],
+  };
+  let [after, before] = pairs.image;
+  const natW = (el) => el.naturalWidth || el.videoWidth || 0;
+  const natH = (el) => el.naturalHeight || el.videoHeight || 0;
   const beforeWrap = root.querySelector(".compare-before");
   const split = root.querySelector(".split");
   const level = root.querySelector(".zoom-level");
@@ -26,7 +34,7 @@ window.CompareViewer = (root) => {
   // Where the fitted (object-fit: contain) picture sits inside the box at zoom 1.
   function fitRect() {
     const cw = view.clientWidth, ch = view.clientHeight;
-    const nw = after.naturalWidth || cw, nh = after.naturalHeight || ch;
+    const nw = natW(after) || cw, nh = natH(after) || ch;
     const s = Math.min(cw / nw, ch / nh);
     const dw = nw * s, dh = nh * s;
     return { cw, ch, s, dw, dh, ox: (cw - dw) / 2, oy: (ch - dh) / 2 };
@@ -183,22 +191,78 @@ window.CompareViewer = (root) => {
   new ResizeObserver(() => apply()).observe(view);
   document.addEventListener("fullscreenchange", () => requestAnimationFrame(apply));
 
-  // ---------- Public ----------
-  function load(afterUrl, beforeUrl) {
-    z = 1; tx = 0; ty = 0;
-    const single = !beforeUrl;
+  // ---------- Video playback (both clips as one) ----------
+  const player = root.querySelector(".player");
+  const playBtn = root.querySelector("#play-toggle");
+  const seek = root.querySelector("#seek");
+  const clock = root.querySelector("#clock");
+  const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  const videoMode = () => after === pairs.video[0];
+
+  function syncBefore(force = false) {
+    const b = pairs.video[1];
+    if (beforeWrap.hidden || !b.src) return;
+    if (force || Math.abs(b.currentTime - after.currentTime) > 0.12) b.currentTime = after.currentTime;
+  }
+  function setPlaying(playing) {
+    playBtn.setAttribute("aria-label", playing ? "إيقاف مؤقت" : "تشغيل");
+    playBtn.dataset.state = playing ? "playing" : "paused";
+  }
+  playBtn.addEventListener("click", () => {
+    if (after.paused) after.play().catch(() => {});
+    else after.pause();
+  });
+  seek.addEventListener("input", () => {
+    if (after.duration) after.currentTime = (Number(seek.value) / 1000) * after.duration;
+  });
+  const v = pairs.video[0];
+  v.addEventListener("play", () => { setPlaying(true); syncBefore(true); pairs.video[1].play().catch(() => {}); });
+  v.addEventListener("pause", () => { setPlaying(false); pairs.video[1].pause(); syncBefore(true); });
+  v.addEventListener("seeked", () => syncBefore(true));
+  v.addEventListener("ratechange", () => { pairs.video[1].playbackRate = v.playbackRate; });
+  v.addEventListener("timeupdate", () => {
+    if (v.duration) seek.value = String(Math.round((v.currentTime / v.duration) * 1000));
+    clock.textContent = `${fmt(v.currentTime)} / ${fmt(v.duration || 0)}`;
+    syncBefore();
+  });
+  v.addEventListener("ended", () => setPlaying(false));
+  // A "before" clip the browser can't play (e.g. HEVC on some phones): compare is off, result stays.
+  pairs.video[1].addEventListener("error", () => { if (videoMode()) setSingle(true); });
+
+  function setSingle(single) {
     view.classList.toggle("is-single", single);
     beforeWrap.hidden = single;
     root.querySelectorAll(".tag").forEach((t) => { t.hidden = single; });
-    if (beforeUrl) before.src = beforeUrl;
-    after.onload = () => {
-      view.style.setProperty("--ratio", `${after.naturalWidth} / ${after.naturalHeight}`);
+    setSplit(single ? 100 : 50);
+  }
+
+  // ---------- Public ----------
+  function load(afterUrl, beforeUrl, { video = false } = {}) {
+    z = 1; tx = 0; ty = 0;
+    // Stop whatever played before and switch between the picture and the video pair.
+    pairs.video.forEach((el) => { el.pause(); el.removeAttribute("src"); el.load(); });
+    [after, before] = video ? pairs.video : pairs.image;
+    Object.entries(pairs).forEach(([mode, els]) => els.forEach((el) => { el.hidden = (mode === "video") !== video; }));
+    player.hidden = !video;
+    setSingle(!beforeUrl);
+    const ready = () => {
+      view.style.setProperty("--ratio", `${natW(after)} / ${natH(after)}`);
       apply();
     };
+    if (video) {
+      after.onloadedmetadata = ready;
+      setPlaying(false);
+      seek.value = "0";
+      clock.textContent = "0:00";
+    } else {
+      after.onload = ready;
+    }
+    if (beforeUrl) before.src = beforeUrl;
     after.src = afterUrl;
-    setSplit(single ? 100 : 50);
     apply();
   }
 
-  return { load, setSplit };
+  function stop() { pairs.video.forEach((el) => el.pause()); }
+
+  return { load, setSplit, stop };
 };
