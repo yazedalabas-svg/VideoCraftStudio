@@ -1,21 +1,11 @@
 // VideoCraft Studio — AI upscaling that runs on the visitor's own GPU.
 //
-// Same model families as the Windows app (Real-ESRGAN, Real-CUGAN), converted
-// to TensorFlow.js graph models. The converted graphs only accept a fixed
-// 64×64 input (the shape is baked into their weights), so the image is cut into
-// overlapping tiles and only the centre of every tile is kept, so seams never show.
-//
-// Speed notes (the slow part on phones is waiting for the GPU, not the maths):
-//  • tiles are queued on the GPU in groups and read back once per group, not once per tile;
-//  • tile centres are cropped, joined and (for ×2 from a ×4 model) shrunk on the GPU,
-//    so far less data travels back to JavaScript;
-//  • prepare() downloads the model and compiles the GPU shaders ahead of time,
-//    while the visitor is still choosing settings.
-//
-// Robustness: every step that talks to the browser (script loads, GPU backend,
-// model download, first GPU run) has a time limit, because some in-app browsers
-// leave such calls hanging forever instead of failing. A timeout rejects, and the
-// page then falls back to the server's regular upscaling.
+// Same model families as the Windows app (Real-ESRGAN, Real-CUGAN), converted to
+// TensorFlow.js. All the heavy work happens in a Web Worker (ai-worker.js), so:
+//  • compiling GPU shaders or a slow GPU never freezes the page;
+//  • a watchdog here kills the worker if it goes quiet (a stuck GPU or an
+//    in-app browser that never answers), and the page falls back to the
+//    server's regular upscaler instead of hanging.
 //
 // Usage:
 //   VCAI.prepare("photo", 2, onStatus);                 // optional warm-up
@@ -23,11 +13,7 @@
 window.VCAI = (() => {
   "use strict";
 
-  const BASE = "/static";
-  const TILE = 64; // model input size (fixed by the converted graphs)
-  const PAD = 6; // context pixels discarded on each side of a tile
-  const STEP = TILE - PAD * 2;
-  const GROUP = 12; // tiles queued on the GPU before one read-back
+  const QUIET_LIMIT = 40000; // ms without any message from the worker = stuck
 
   const MODELS = {
     photo: { label: "Real-ESRGAN (صور)", path: () => "realesrgan/general_fast-64", native: () => 4 },
@@ -36,108 +22,92 @@ window.VCAI = (() => {
     anime_clean: { label: "Real-CUGAN Denoise", path: (s) => `realcugan/${s}x-denoise3x-64`, native: (s) => s },
   };
 
-  let runtime = null; // Promise<backend name>
-  const prepared = new Map(); // model path → { promise, listeners, last } (downloaded + shaders compiled)
+  // ---------- Worker plumbing ----------
+  let worker = null;
+  let nextId = 1;
+  let lastMessage = 0;
+  let lastStatus = null; // replayed to late listeners, e.g. "تحميل النموذج… 40%"
+  const pending = new Map(); // id → { resolve, reject, onStatus, onProgress }
+  const ready = new Map(); // model path → Promise<backend>
+  let watchdog = null;
 
-  function withTimeout(promise, ms, message) {
-    let timer;
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
-    ]).finally(() => clearTimeout(timer));
-  }
-
-  // ---------- Runtime ----------
-  function loadScript(src) {
-    return withTimeout(new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = src;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error(`تعذّر تحميل ${src}`));
-      document.head.append(s);
-    }), 45000, "انتهت مهلة تحميل مكتبة الذكاء الاصطناعي");
-  }
-
-  function ensureRuntime() {
-    runtime ??= (async () => {
-      if (!window.tf) await loadScript(`${BASE}/vendor/tf.min.js`);
-      let backend = null;
-      if (navigator.gpu) {
-        try {
-          await loadScript(`${BASE}/vendor/tf-backend-webgpu.min.js`);
-          // Some phones expose WebGPU but never answer the adapter request.
-          if (await withTimeout(tf.setBackend("webgpu"), 8000, "webgpu timeout")) backend = "webgpu";
-        } catch { /* fall back to WebGL */ }
+  function getWorker() {
+    if (worker) return worker;
+    worker = new Worker("/static/ai-worker.js");
+    worker.onmessage = ({ data: msg }) => {
+      lastMessage = Date.now();
+      if (msg.type === "status") {
+        lastStatus = [msg.text, msg.fraction];
+        pending.forEach((p) => p.onStatus?.(msg.text, msg.fraction));
+      } else if (msg.type === "progress") {
+        pending.forEach((p) => p.onProgress?.(msg.fraction));
+      } else if (pending.has(msg.id)) {
+        const p = pending.get(msg.id);
+        pending.delete(msg.id);
+        if (msg.type === "error") p.reject(new Error(msg.message));
+        else p.resolve(msg);
       }
-      if (!backend) {
-        // Half-precision textures are about twice as fast on phone GPUs; image quality is unaffected.
-        if (/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)) tf.env().set("WEBGL_FORCE_F16_TEXTURES", true);
-        try { if (await withTimeout(tf.setBackend("webgl"), 15000, "webgl timeout")) backend = "webgl"; } catch { /* no GPU path */ }
+    };
+    worker.onerror = (e) => reset(new Error(e.message || "تعطّل محرك الذكاء الاصطناعي"));
+    return worker;
+  }
+
+  // Stop the worker and fail everything that was waiting on it.
+  function reset(error) {
+    worker?.terminate();
+    worker = null;
+    ready.clear();
+    lastStatus = null;
+    clearInterval(watchdog);
+    watchdog = null;
+    const waiting = [...pending.values()];
+    pending.clear();
+    waiting.forEach((p) => p.reject(error));
+  }
+
+  function request(msg, handlers = {}, transfer = []) {
+    const w = getWorker();
+    const id = nextId++;
+    lastMessage = Date.now();
+    watchdog ??= setInterval(() => {
+      if (pending.size && Date.now() - lastMessage > QUIET_LIMIT) {
+        reset(new Error("كرت الشاشة في هذا الجهاز ما استجاب"));
       }
-      if (!backend) throw new Error("متصفحك لا يدعم تشغيل الذكاء الاصطناعي على كرت الشاشة (WebGPU / WebGL).");
-      await tf.ready();
-      return backend;
-    })();
-    runtime.catch(() => { runtime = null; }); // allow a retry after a failure
-    return runtime;
+    }, 1000);
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject, ...handlers });
+      if (handlers.onStatus && lastStatus) handlers.onStatus(...lastStatus);
+      w.postMessage({ ...msg, id }, transfer);
+    });
   }
 
-  // The browser's HTTP cache keeps the model for a week (see web/app.py), so no
-  // IndexedDB copy is needed — and IndexedDB is exactly what hangs in some in-app browsers.
-  // The download fails if it makes no progress for 30 s.
-  function loadModel(path, onFraction) {
-    let last = Date.now();
-    let watchdog;
-    const stalled = new Promise((_, reject) => {
-      watchdog = setInterval(() => {
-        if (Date.now() - last > 30000) reject(new Error("توقف تحميل النموذج (الاتصال بطيء أو مقطوع)"));
-      }, 2000);
-    });
-    const load = tf.loadGraphModel(`${BASE}/models/${path}/model.json`, {
-      onProgress: (f) => { last = Date.now(); onFraction?.(f); },
-    });
-    return Promise.race([load, stalled]).finally(() => clearInterval(watchdog));
-  }
-
+  // ---------- Public API ----------
   /**
-   * Download the model and compile its GPU shaders so the real run starts at full speed.
-   * Safe to call many times; the work happens once per model.
+   * Download the model and compile its GPU shaders ahead of the real run.
    * @param {(text: string, fraction: number|null) => void} [onStatus]
+   * @returns {Promise<string>} the GPU backend ("webgpu" | "webgl")
    */
   function prepare(model = "photo", scale = 2, onStatus) {
     const spec = MODELS[model] || MODELS.photo;
     const path = spec.path(scale === 4 ? 4 : 2);
-    let entry = prepared.get(path);
-    if (!entry) {
-      // Everyone waiting on this model (warm-up and the real run) sees the same live status.
-      entry = { listeners: new Set(), last: null };
-      const emit = (text, fraction) => {
-        entry.last = [text, fraction];
-        entry.listeners.forEach((fn) => fn(text, fraction));
-      };
-      entry.promise = (async () => {
-        emit("تجهيز كرت الشاشة…", null);
-        await ensureRuntime();
-        emit("تحميل النموذج… 0%", 0);
-        const graph = await loadModel(path, (f) => emit(`تحميل النموذج… ${Math.round(f * 100)}%`, f * 0.8));
-        emit("تسخين كرت الشاشة… (أول مرة فقط)", 0.85);
-        const warm = graph.predict(tf.zeros([1, TILE, TILE, 3])); // compiles every shader once
-        await withTimeout(warm.data(), 90000, "كرت الشاشة لم يستجب");
-        warm.dispose();
-        return graph;
-      })();
-      entry.promise.catch(() => prepared.delete(path)); // a later attempt starts fresh
-      prepared.set(path, entry);
+    if (!ready.has(path)) {
+      const job = request({ type: "prepare", path }, { onStatus }).then((m) => m.backend);
+      job.catch(() => ready.delete(path));
+      ready.set(path, job);
+      return job;
     }
+    // Already loading or loaded: still show this caller the live status.
+    const job = ready.get(path);
     if (onStatus) {
-      entry.listeners.add(onStatus);
-      if (entry.last) onStatus(...entry.last);
-      entry.promise.finally(() => entry.listeners.delete(onStatus)).catch(() => {});
+      if (lastStatus) onStatus(...lastStatus);
+      const listener = { onStatus, resolve() {}, reject() {} };
+      const key = `status-${nextId++}`;
+      pending.set(key, listener);
+      job.finally(() => pending.delete(key)).catch(() => {});
     }
-    return entry.promise;
+    return job;
   }
 
-  // ---------- Image helpers ----------
   async function decode(file) {
     const bitmap = await createImageBitmap(file);
     const canvas = document.createElement("canvas");
@@ -149,113 +119,43 @@ window.VCAI = (() => {
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   }
 
-  // Tile input with edge clamping, so borders and tiny images need no special case.
-  function readTile(src, x0, y0) {
-    const { width: w, height: h, data } = src;
-    const out = new Float32Array(TILE * TILE * 3);
-    let o = 0;
-    for (let y = 0; y < TILE; y++) {
-      const sy = Math.min(h - 1, Math.max(0, y0 - PAD + y));
-      for (let x = 0; x < TILE; x++) {
-        const sx = Math.min(w - 1, Math.max(0, x0 - PAD + x));
-        const i = (sy * w + sx) * 4;
-        out[o++] = data[i] / 255;
-        out[o++] = data[i + 1] / 255;
-        out[o++] = data[i + 2] / 255;
-      }
-    }
-    return out;
-  }
-
-  const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
-
-  // ---------- Inference ----------
-  // `native` is the model's own factor; `scale` is what the visitor asked for (≤ native).
-  async function runModel(src, model, native, scale, onProgress, signal) {
-    const outW = src.width * scale;
-    const outH = src.height * scale;
-    const out = new Uint8ClampedArray(outW * outH * 4);
-    const shrink = native / scale; // 1, or 2 when a ×4 model serves a ×2 request
-    const tilesX = Math.ceil(src.width / STEP);
-    const tilesY = Math.ceil(src.height / STEP);
-    const total = tilesX * tilesY;
-    let done = 0;
-
-    for (let ty = 0; ty < tilesY; ty++) {
-      const y0 = ty * STEP;
-      const keepH = Math.min(STEP, src.height - y0);
-
-      for (let first = 0; first < tilesX; first += GROUP) {
-        if (signal?.aborted) throw new DOMException("cancelled", "AbortError");
-        const last = Math.min(tilesX, first + GROUP);
-
-        // Queue this group on the GPU and join the kept centres into one strip.
-        const strip = tf.tidy(() => {
-          const parts = [];
-          for (let tx = first; tx < last; tx++) {
-            const x0 = tx * STEP;
-            const keepW = Math.min(STEP, src.width - x0);
-            const y = model.predict(tf.tensor4d(readTile(src, x0, y0), [1, TILE, TILE, 3]));
-            parts.push(y.slice([0, PAD * native, PAD * native, 0], [1, keepH * native, keepW * native, 3]));
-          }
-          let joined = parts.length > 1 ? tf.concat(parts, 2) : parts[0];
-          if (shrink > 1) joined = tf.avgPool(joined, shrink, shrink, "valid"); // area downscale on the GPU
-          return joined.clipByValue(0, 1).mul(255);
-        });
-
-        const [, sh, sw] = strip.shape;
-        // The only GPU → JS wait for this group; a GPU that stops answering must not hang the page.
-        const pixels = await withTimeout(strip.data(), 60000, "كرت الشاشة توقف عن الاستجابة");
-        strip.dispose();
-
-        const dx = first * STEP * scale;
-        const dy = y0 * scale;
-        for (let y = 0; y < sh; y++) {
-          let s = y * sw * 3;
-          let d = ((dy + y) * outW + dx) * 4;
-          for (let x = 0; x < sw; x++) {
-            out[d++] = pixels[s++];
-            out[d++] = pixels[s++];
-            out[d++] = pixels[s++];
-            out[d++] = 255;
-          }
-        }
-        done += last - first;
-        onProgress?.(done / total);
-        await nextFrame(); // let the progress bar paint
-      }
-    }
-    return new ImageData(out, outW, outH);
-  }
-
-  // ---------- Public API ----------
   /**
    * @param {Blob} file         source image
    * @param {object} opts
    * @param {"photo"|"anime"|"anime_extreme"|"anime_clean"} opts.model
    * @param {2|4} opts.scale    requested enlargement
    * @param {(fraction:number, stage:string)=>void} [opts.onProgress]
-   * @param {AbortSignal} [opts.signal]
+   * @param {AbortSignal} [opts.signal]  aborting kills the worker at once
    * @returns {Promise<{canvas: HTMLCanvasElement, width: number, height: number, backend: string, label: string}>}
    */
   async function upscale(file, { model = "photo", scale = 2, onProgress, signal } = {}) {
     const spec = MODELS[model] || MODELS.photo;
     scale = scale === 4 ? 4 : 2;
-
-    const graph = await prepare(model, scale, (text) => onProgress?.(0, text));
-    const backend = await ensureRuntime();
-    const src = await decode(file);
-    const imageData = await runModel(src, graph, spec.native(scale), scale,
-      (f) => onProgress?.(f, "الذكاء الاصطناعي يكبّر الصورة على جهازك…"), signal);
-
-    const canvas = document.createElement("canvas");
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
-    canvas.getContext("2d").putImageData(imageData, 0, 0);
-    return { canvas, width: canvas.width, height: canvas.height, backend, label: spec.label };
+    const onAbort = () => reset(new DOMException("cancelled", "AbortError"));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      await prepare(model, scale, (text) => onProgress?.(0, text));
+      const src = await decode(file);
+      const res = await request(
+        { type: "run", path: spec.path(scale), native: spec.native(scale), scale, width: src.width, height: src.height, pixels: src.data.buffer },
+        { onProgress: (f) => onProgress?.(f, "الذكاء الاصطناعي يكبّر الصورة على جهازك…") },
+        [src.data.buffer],
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = res.width;
+      canvas.height = res.height;
+      canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(res.pixels), res.width, res.height), 0, 0);
+      return { canvas, width: res.width, height: res.height, backend: res.backend, label: spec.label };
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
   }
 
-  const supported = () => Boolean(navigator.gpu || document.createElement("canvas").getContext("webgl2"));
+  function supported() {
+    if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined") return false;
+    if (navigator.gpu) return true;
+    try { return Boolean(new OffscreenCanvas(1, 1).getContext("webgl2")); } catch { return false; }
+  }
 
   return { upscale, prepare, supported, MODELS };
 })();
