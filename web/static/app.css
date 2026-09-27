@@ -170,3 +170,14 @@ select {
 }
 .compare.is-single::after { display: none; }
 [tabindex="-1"]:focus { outline: none; }
+
+/* ===== AI box ===== */
+.ai-box { border: 1px solid color-mix(in srgb, var(--teal) 40%, var(--line)); background: color-mix(in srgb, var(--teal) 6%, transparent); border-radius: 12px; padding: 12px 16px 6px; }
+.ai-box legend { padding-inline: 6px; color: var(--teal); }
+.ai-box .field { margin: 10px 0 4px; max-width: 420px; }
+.switch { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; }
+.switch input { width: 20px; height: 20px; accent-color: var(--teal); margin: 0; }
+.ai-box .alert { margin: 6px 0 8px; font-size: 13.5px; }
+option:disabled { color: var(--muted); }
+.slider input:disabled { opacity: .4; }
+.slider:has(input:disabled) label::after { content: " (يتكفّل به الذكاء الاصطناعي)"; font-size: 12px; color: var(--muted); }

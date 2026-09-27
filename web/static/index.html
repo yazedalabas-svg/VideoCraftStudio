@@ -8,6 +8,7 @@
 <meta name="theme-color" content="#101215">
 <link rel="icon" href="/about/videocraft.svg">
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/ai.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -63,6 +64,22 @@
           <label class="chip"><input type="radio" name="preset" value="vivid"><span>ألوان حيّة</span></label>
           <label class="chip"><input type="radio" name="preset" value="light"><span>لمسة خفيفة</span></label>
         </div>
+      </fieldset>
+
+      <fieldset class="ai-box" data-only="image" aria-describedby="ai-hint">
+        <legend>✨ الذكاء الاصطناعي</legend>
+        <label class="switch"><input type="checkbox" name="ai" id="ai-toggle" checked> <span>تكبير واستعادة التفاصيل بالذكاء الاصطناعي</span></label>
+        <div class="field" id="ai-options">
+          <label for="ai_model">النموذج</label>
+          <select id="ai_model" name="ai_model">
+            <option value="photo">صور حقيقية — Real-ESRGAN</option>
+            <option value="anime">أنمي ورسوم — Real-ESRGAN Anime</option>
+            <option value="anime_extreme">أنمي بأقصى تفاصيل — Real-CUGAN</option>
+            <option value="anime_clean">أنمي + تنظيف قوي — Real-CUGAN Denoise</option>
+          </select>
+        </div>
+        <p id="ai-hint" class="hint">نفس نماذج نسخة ويندوز، وتشتغل على كرت الشاشة في جهازك (WebGPU/WebGL). أول مرة يحمّل النموذج (٢–٣ ميغا) وبعدها يصير أسرع.</p>
+        <p id="ai-unsupported" class="alert" hidden>متصفحك لا يدعم تشغيل الذكاء الاصطناعي على كرت الشاشة. جرّب Chrome أو Edge حديث، أو استخدم التكبير العادي.</p>
       </fieldset>
 
       <div class="grid">
@@ -134,7 +151,7 @@
         </div>
       </details>
 
-      <p class="note">المعالجة تتم على خادم مجاني بقدرة محدودة، فالفيديو قد يأخذ عدة دقائق. نماذج الذكاء الاصطناعي متوفرة في <a href="/about/#install">نسخة ويندوز</a> فقط.</p>
+      <p class="note" data-only="video">المعالجة تتم على خادم مجاني بقدرة محدودة، فالفيديو قد يأخذ عدة دقائق. تحسين الفيديو بالذكاء الاصطناعي (Video2X / RIFE) متوفر في <a href="/about/#install">نسخة ويندوز</a>.</p>
 
       <button type="submit" class="btn btn-main btn-block" id="start">ابدأ التحسين</button>
     </form>

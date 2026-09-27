@@ -39,6 +39,10 @@
   let pollTimer = null;
   let upload = null;
   let imageSize = null; // natural size of the picked image, for the upscale preview
+  let aiAbort = null; // AbortController while the in-browser AI is running
+  let aiInfo = ""; // e.g. "Real-CUGAN ×4 • webgpu", shown with the result
+  const AI_SUPPORTED = Boolean(window.VCAI && VCAI.supported());
+  const AI_MAX_OUTPUT_MP = 36; // same cap as the server, keeps browser memory sane
 
   // ---------- Views ----------
   const views = ["pick", "setup", "work", "done", "failed"];
@@ -113,7 +117,7 @@
     const allowed = kind === "image" ? config.image_resolutions : config.video_resolutions;
     res.replaceChildren(...allowed.map((v) => new Option(RES_LABELS[v] || v, v)));
     res.value = "source";
-    updateUpscaleHint();
+    syncAiControls();
 
     show("setup");
   }
@@ -163,6 +167,12 @@
     if (!imageSize) { hint.textContent = ""; return; }
     const { w, h } = imageSize;
     const choice = form.elements.upscale.value;
+    if (useAI()) {
+      const n = Number(choice);
+      const problem = aiSizeProblem();
+      hint.textContent = problem || `النتيجة: ${ltr(`${w}×${h} → ${w * n}×${h * n}`)}`;
+      return;
+    }
     const out = upscaleSize(w, h, choice);
     hint.textContent = out
       ? `النتيجة: ${ltr(`${w}×${h} → ${out[0]}×${out[1]}`)}`
@@ -170,9 +180,43 @@
   }
   form.elements.upscale.addEventListener("change", updateUpscaleHint);
 
+  // ---------- AI (runs in the browser on the visitor's GPU) ----------
+  const aiToggle = form.elements.ai;
+  if (!AI_SUPPORTED) {
+    aiToggle.checked = false;
+    aiToggle.disabled = true;
+    $("ai-unsupported").hidden = false;
+  }
+  const useAI = () => kind === "image" && AI_SUPPORTED && aiToggle.checked;
+
+  // The AI models only do ×2 and ×4, so the other upscale choices are disabled while AI is on.
+  function syncAiControls() {
+    const on = useAI();
+    $("ai-options").hidden = !on;
+    const select = form.elements.upscale;
+    [...select.options].forEach((o) => { o.disabled = on && !["2", "4"].includes(o.value); });
+    if (on && !["2", "4"].includes(select.value)) select.value = "2";
+    // The AI model already removes noise; the server's denoise would only soften its detail.
+    form.elements.denoise.disabled = on;
+    form.elements.denoise.title = on ? "الذكاء الاصطناعي يتكفّل بإزالة التشويش" : "";
+    updateUpscaleHint();
+  }
+  aiToggle.addEventListener("change", syncAiControls);
+
+  // Returns an Arabic message if the image is too big for an AI upscale, else "".
+  function aiSizeProblem() {
+    if (!useAI() || !imageSize) return "";
+    const scale = Number(form.elements.upscale.value);
+    const outMP = (imageSize.w * scale) * (imageSize.h * scale) / 1e6;
+    if (outMP <= AI_MAX_OUTPUT_MP) return "";
+    return scale === 4 && imageSize.w * imageSize.h * 4 / 1e6 <= AI_MAX_OUTPUT_MP
+      ? "الصورة كبيرة على ×4 بالذكاء الاصطناعي. اختر ×2."
+      : "الصورة كبيرة على التكبير بالذكاء الاصطناعي. استخدم التكبير العادي.";
+  }
+
   function collectOptions() {
     const o = {};
-    ["resolution", "upscale", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
+    ["resolution", "upscale", "ai_model", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
     ["interpolate", "stabilize", "deinterlace", "audio_normalize", "audio_clean"].forEach((k) => { o[k] = form.elements[k].checked; });
     return o;
   }
@@ -180,7 +224,10 @@
   form.addEventListener("submit", (e) => { e.preventDefault(); start(); });
 
   // ---------- 3. Upload + poll ----------
+  // With AI the bar is split: AI on this device 0–50%, upload + server 50–100%.
+  let phase = { base: 0, span: 1 };
   function setProgress(fraction, text, indeterminate = false) {
+    fraction = phase.base + fraction * phase.span;
     const bar = $("bar");
     bar.classList.toggle("is-indeterminate", indeterminate);
     const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
@@ -190,13 +237,51 @@
     if (text) $("work-status").textContent = text;
   }
 
-  function start() {
+  async function start() {
     if (!file) return;
+    const problem = aiSizeProblem();
+    if (problem) { $("upscale-size").textContent = problem; form.elements.upscale.focus(); return; }
+
     $("start").disabled = true;
     show("work");
-    setProgress(0, "جاري الرفع… 0%");
+    aiInfo = "";
+    const options = collectOptions();
 
-    const params = new URLSearchParams({ filename: file.name, options: JSON.stringify(collectOptions()) });
+    if (!useAI()) {
+      phase = { base: 0, span: 1 };
+      return send(file, file.name, options);
+    }
+
+    // 1) AI upscale in the browser
+    phase = { base: 0, span: 0.5 };
+    aiAbort = new AbortController();
+    let result;
+    try {
+      result = await VCAI.upscale(file, {
+        model: options.ai_model,
+        scale: Number(options.upscale),
+        signal: aiAbort.signal,
+        onProgress: (f, stage) => setProgress(f, `${stage} ${f > 0 ? Math.round(f * 100) + "%" : ""}`, f === 0),
+      });
+    } catch (err) {
+      $("start").disabled = false;
+      aiAbort = null;
+      if (err && err.name === "AbortError") return show("setup");
+      return fail(`تعذّر تشغيل الذكاء الاصطناعي على جهازك: ${err && err.message ? err.message : err}. جرّب التكبير العادي.`);
+    }
+    aiAbort = null;
+    aiInfo = `✨ ${result.label} ×${options.upscale} على كرت الشاشة (${result.backend})`;
+
+    // 2) Send the AI result to the server for colour/sharpen/format. The model already
+    //    removed noise and enlarged it, so the server must not denoise or scale again.
+    phase = { base: 0.5, span: 0.5 };
+    const stem = file.name.replace(/\.[^.]+$/, "") || "image";
+    send(result.blob, `${stem}.png`, { ...options, upscale: "none", resolution: "source", denoise: 0 });
+  }
+
+  function send(body, filename, options) {
+    setProgress(0, "جاري الرفع… 0%");
+    const params = new URLSearchParams({ filename, options: JSON.stringify(options) });
     upload = new XMLHttpRequest();
     upload.open("POST", `/api/jobs?${params}`);
     upload.setRequestHeader("Content-Type", "application/octet-stream");
@@ -218,7 +303,7 @@
     };
     upload.onerror = () => { upload = null; $("start").disabled = false; fail("انقطع الاتصال أثناء الرفع. حاول مرة ثانية."); };
     upload.onabort = () => { upload = null; $("start").disabled = false; show("setup"); };
-    upload.send(file);
+    upload.send(body);
   }
 
   async function poll() {
@@ -257,6 +342,7 @@
   }
 
   $("cancel").addEventListener("click", async () => {
+    if (aiAbort) return aiAbort.abort();
     if (upload) return upload.abort();
     clearTimeout(pollTimer);
     if (jobId) {
@@ -294,6 +380,10 @@
     const info = job.info || {};
     const upscaled = info.output_width ? ` • بعد التكبير: ${ltr(`${info.output_width}×${info.output_height}`)}` : "";
     $("done-info").textContent = info.width ? `الأصل: ${ltr(`${info.width}×${info.height}`)}${upscaled}${info.duration ? ` • ${Math.round(info.duration)} ث` : ""}` : "";
+    // After an AI pass the server only saw the enlarged picture, so report the true original.
+    if (aiInfo && imageSize && info.width) {
+      $("done-info").textContent = `الأصل: ${ltr(`${imageSize.w}×${imageSize.h}`)} • النتيجة: ${ltr(`${info.width}×${info.height}`)} • ${aiInfo}`;
+    }
     $("tweak").hidden = !file;
     show("done");
   }
