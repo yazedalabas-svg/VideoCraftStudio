@@ -41,6 +41,7 @@
   let imageSize = null; // natural size of the picked image, for the upscale preview
   let aiAbort = null; // AbortController while the in-browser AI is running
   let aiInfo = ""; // e.g. "Real-CUGAN ×4 • webgpu", shown with the result
+  let localResultUrl = null; // blob: URL of a result made on this device (AI mode)
   const AI_SUPPORTED = Boolean(window.VCAI && VCAI.supported());
   const AI_MAX_OUTPUT_MP = 36; // same cap as the server, keeps browser memory sane
 
@@ -196,12 +197,27 @@
     const select = form.elements.upscale;
     [...select.options].forEach((o) => { o.disabled = on && !["2", "4"].includes(o.value); });
     if (on && !["2", "4"].includes(select.value)) select.value = "2";
-    // The AI model already removes noise; the server's denoise would only soften its detail.
-    form.elements.denoise.disabled = on;
-    form.elements.denoise.title = on ? "الذكاء الاصطناعي يتكفّل بإزالة التشويش" : "";
+    // The AI model already removes noise and restores edges; extra denoise/sharpen would only hurt.
+    ["denoise", "sharpness"].forEach((k) => { form.elements[k].disabled = on; });
     updateUpscaleHint();
+    warmUp();
   }
   aiToggle.addEventListener("change", syncAiControls);
+  form.elements.ai_model.addEventListener("change", warmUp);
+  form.elements.upscale.addEventListener("change", warmUp);
+
+  // Download the model and compile GPU shaders while the visitor is still choosing settings.
+  let warmToken = 0;
+  function warmUp() {
+    const status = $("ai-status");
+    if (!useAI()) { status.textContent = ""; return; }
+    const token = ++warmToken;
+    const model = form.elements.ai_model.value;
+    const scale = Number(form.elements.upscale.value);
+    VCAI.prepare(model, scale, (text) => { if (token === warmToken) status.textContent = `⏳ ${text}`; })
+      .then(() => { if (token === warmToken) status.textContent = "✅ النموذج جاهز على كرت الشاشة"; })
+      .catch(() => { if (token === warmToken) status.textContent = ""; }); // the real run reports errors
+  }
 
   // Returns an Arabic message if the image is too big for an AI upscale, else "".
   function aiSizeProblem() {
@@ -253,7 +269,7 @@
     }
 
     // 1) AI upscale in the browser
-    phase = { base: 0, span: 0.5 };
+    phase = { base: 0, span: 0.9 };
     aiAbort = new AbortController();
     let result;
     try {
@@ -271,12 +287,83 @@
     }
     aiAbort = null;
     aiInfo = `✨ ${result.label} ×${options.upscale} على كرت الشاشة (${result.backend})`;
-
-    // 2) Send the AI result to the server for colour/sharpen/format. The model already
-    //    removed noise and enlarged it, so the server must not denoise or scale again.
-    phase = { base: 0.5, span: 0.5 };
     const stem = file.name.replace(/\.[^.]+$/, "") || "image";
-    send(result.blob, `${stem}.png`, { ...options, upscale: "none", resolution: "source", denoise: 0 });
+
+    // 2) Colours + saving happen right here: no upload, no queue, no download.
+    const filter = colourFilter(options);
+    if (!filter || canvasFilterWorks()) {
+      phase = { base: 0.9, span: 0.1 };
+      setProgress(0.5, "حفظ النتيجة…", true);
+      try {
+        return await finishOnDevice(result.canvas, filter, options, stem);
+      } catch { /* fall back to the server below */ }
+    }
+
+    // Fallback (old browsers without canvas filters): the server applies colours and format.
+    phase = { base: 0.5, span: 0.5 };
+    const png = await new Promise((r) => result.canvas.toBlob(r, "image/png"));
+    send(png, `${stem}.png`, { ...options, upscale: "none", resolution: "source", denoise: 0, sharpness: 0 });
+  }
+
+  // ---------- Finishing on the device (AI mode) ----------
+  // Same intent as the server's eq/colorbalance filters (web/jobs.py → video_engine._color_filters).
+  const STYLE_FILTERS = {
+    none: "",
+    natural: "contrast(1.025) saturate(1.035)",
+    warm: "contrast(1.045) saturate(1.055) sepia(0.06)",
+    bright: "brightness(1.03) contrast(1.02) saturate(1.02)",
+    cinematic: "contrast(1.07) saturate(0.945) brightness(0.99)",
+  };
+  function colourFilter(o) {
+    const parts = [];
+    const b = 1 + Number(o.brightness) / 250, c = 1 + Number(o.contrast) / 160, sat = 1 + Number(o.saturation) / 110;
+    if (b !== 1) parts.push(`brightness(${b.toFixed(3)})`);
+    if (c !== 1) parts.push(`contrast(${c.toFixed(3)})`);
+    if (sat !== 1) parts.push(`saturate(${sat.toFixed(3)})`);
+    if (STYLE_FILTERS[o.color_style]) parts.push(STYLE_FILTERS[o.color_style]);
+    return parts.join(" ");
+  }
+
+  let filterSupport = null;
+  function canvasFilterWorks() {
+    if (filterSupport !== null) return filterSupport;
+    try {
+      const ctx = document.createElement("canvas").getContext("2d");
+      ctx.filter = "brightness(0.5)";
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, 1, 1);
+      filterSupport = ctx.getImageData(0, 0, 1, 1).data[0] < 200;
+    } catch { filterSupport = false; }
+    return filterSupport;
+  }
+
+  async function finishOnDevice(canvas, filter, options, stem) {
+    let out = canvas;
+    if (filter) {
+      out = document.createElement("canvas");
+      out.width = canvas.width;
+      out.height = canvas.height;
+      const ctx = out.getContext("2d");
+      ctx.filter = filter;
+      ctx.drawImage(canvas, 0, 0);
+    }
+    const type = { jpg: "image/jpeg", webp: "image/webp" }[options.image_format] || "image/png";
+    const quality = 0.97 - ((Number(options.quality) - 14) / 16) * 0.25; // 14 → 0.97 … 30 → 0.72
+    const blob = await new Promise((resolve, reject) =>
+      out.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), type, quality));
+    // Some browsers (older Safari) can't write WebP and silently give PNG.
+    const ext = { "image/jpeg": "jpg", "image/webp": "webp" }[blob.type] || "png";
+
+    if (localResultUrl) URL.revokeObjectURL(localResultUrl);
+    localResultUrl = URL.createObjectURL(blob);
+    $("start").disabled = false;
+    showResult({
+      url: localResultUrl,
+      downloadUrl: localResultUrl,
+      downloadName: `${stem}-videocraft.${ext}`,
+      kind: "image",
+      info: { width: out.width, height: out.height },
+    });
   }
 
   function send(body, filename, options) {
@@ -356,11 +443,15 @@
   // ---------- 4. Result ----------
   function finish(job) {
     const url = `/api/jobs/${encodeURIComponent(job.id)}/result`;
-    const dl = $("download");
-    dl.href = `${url}?download=1`;
-    dl.setAttribute("download", job.download_name);
+    showResult({ url, downloadUrl: `${url}?download=1`, downloadName: job.download_name, kind: job.kind, info: job.info || {} });
+  }
 
-    const isImage = job.kind === "image";
+  function showResult({ url, downloadUrl, downloadName, kind: resultKind, info }) {
+    const dl = $("download");
+    dl.href = downloadUrl;
+    dl.setAttribute("download", downloadName);
+
+    const isImage = resultKind === "image";
     $("compare-image").hidden = !isImage;
     $("compare-video").hidden = isImage;
     if (isImage) {
@@ -372,7 +463,6 @@
       before.closest("figure").hidden = !sourceUrl;
       if (sourceUrl) { before.src = sourceUrl; before.onerror = () => { before.closest("figure").hidden = true; }; }
     }
-    const info = job.info || {};
     const upscaled = info.output_width ? ` • بعد التكبير: ${ltr(`${info.output_width}×${info.output_height}`)}` : "";
     $("done-info").textContent = info.width ? `الأصل: ${ltr(`${info.width}×${info.height}`)}${upscaled}${info.duration ? ` • ${Math.round(info.duration)} ث` : ""}` : "";
     // After an AI pass the server only saw the enlarged picture, so report the true original.

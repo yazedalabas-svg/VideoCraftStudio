@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from starlette.applications import Starlette
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
@@ -155,14 +156,41 @@ class SecurityHeaders:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
 
+        # Models and the TF.js runtime never change between deploys of the same file name,
+        # so browsers may keep them for a week (the AI models are also cached in IndexedDB).
+        long_cache = scope["path"].startswith(("/static/vendor/", "/static/models/"))
+
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = message.setdefault("headers", [])
                 headers.append((b"x-content-type-options", b"nosniff"))
                 headers.append((b"referrer-policy", b"strict-origin-when-cross-origin"))
+                if long_cache and message.get("status") == 200:
+                    headers.append((b"cache-control", b"public, max-age=604800"))
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+class TextGZip:
+    """Gzip pages, scripts, styles and model JSON only.
+
+    TF.js (1.4 MB) shrinks to about a quarter, which matters on phones. Images,
+    videos and model weights are already compressed, and gzipping them would
+    only burn the small server's CPU, so they pass through untouched.
+    """
+
+    TEXT = (".js", ".css", ".json", ".html", ".svg")
+
+    def __init__(self, app) -> None:
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=1024)
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope["type"] == "http" else ""
+        if path == "/" or path.startswith("/api/config") or path.endswith(self.TEXT):
+            return await self.gzip(scope, receive, send)
+        return await self.app(scope, receive, send)
 
 
 routes = [
@@ -178,4 +206,4 @@ routes = [
     Mount("/static", StaticFiles(directory=STATIC), name="static"),
 ]
 
-app = SecurityHeaders(Starlette(routes=routes))
+app = SecurityHeaders(TextGZip(Starlette(routes=routes)))
