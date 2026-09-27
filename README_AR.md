@@ -94,7 +94,9 @@
   بعد التكبير تنرفع النتيجة للخادم لتطبيق الألوان والحدّة والصيغة.
 - الذكاء الاصطناعي للفيديو (Video2X / RIFE) يحتاج كرت شاشة قوي لكل إطار، فهو في نسخة ويندوز فقط.
 
-**الحدود (تتغير من Environment في Render):** `MAX_UPLOAD_MB` (200)، `MAX_VIDEO_SECONDS` (180)، `MAX_IMAGE_MEGAPIXELS` (40)، `RESULT_TTL_SECONDS` (3600).
+**الحدود (تتغير من Environment في Render):** `MAX_UPLOAD_MB` (200)، `MAX_VIDEO_SECONDS` (180)، `MAX_VIDEO_SECONDS_2K` (90)، `MAX_VIDEO_SECONDS_4K` (30)، `MAX_IMAGE_MEGAPIXELS` (40)، `RESULT_TTL_SECONDS` (3600).
+
+**الرفع:** الملفات ترتفع على أجزاء 1MB (`/api/uploads`) مع إعادة المحاولة تلقائيًا، فانقطاع الجوال أو إعادة تشغيل الخادم ما يفشّل الرفع.
 
 **النشر:** أي دمج في `main` ينشر تلقائيًا. الخدمة الحالية تشتغل حتى لو كان Start Command هو `0`
 (الحزمة في `deploy/render_start` توفر أمرًا بهذا الاسم)، والأفضل ضبطه إلى `python server.py`.

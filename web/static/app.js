@@ -37,7 +37,6 @@
   let sourceUrl = null;
   let jobId = null;
   let pollTimer = null;
-  let upload = null;
   let imageSize = null; // natural size of the picked image, for the upscale preview
   let aiAbort = null; // AbortController while the in-browser AI is running
   let aiInfo = ""; // e.g. "Real-CUGAN ×4 • webgpu", shown with the result
@@ -119,6 +118,7 @@
     const allowed = kind === "image" ? config.image_resolutions : config.video_resolutions;
     res.replaceChildren(...allowed.map((v) => new Option(RES_LABELS[v] || v, v)));
     res.value = "source";
+    updateResolutionHint();
     syncAiControls();
 
     show("setup");
@@ -149,12 +149,15 @@
     if (e.target.name === "preset") applyPreset(e.target.value);
   });
 
-  // Mirrors web/jobs.py upscale_size(): ×N or "fit 4K", capped by the server's megapixel limit, never smaller.
+  // Mirrors web/jobs.py upscale_size(): ×N or "fit 1080p/2K/4K" (orientation-aware),
+  // capped by the server's megapixel limit, never smaller than the source.
+  const PRESET_BOXES = { "1080p": [1920, 1080], "2k": [2560, 1440], "4k": [3840, 2160] };
   function upscaleSize(w, h, choice) {
     let factor;
     if (["2", "3", "4"].includes(choice)) factor = Number(choice);
-    else if (choice === "4k") {
-      const [bw, bh] = h > w ? [2160, 3840] : w === h ? [2160, 2160] : [3840, 2160];
+    else if (PRESET_BOXES[choice]) {
+      const [long, short] = PRESET_BOXES[choice];
+      const [bw, bh] = h > w ? [short, long] : w === h ? [short, short] : [long, short];
       factor = Math.min(bw / w, bh / h);
     } else return null;
     let ow = Math.floor(w * factor), oh = Math.floor(h * factor);
@@ -164,15 +167,27 @@
     return ow <= w && oh <= h ? null : [ow, oh];
   }
 
+  // AI models come in ×2 and ×4: pick the smallest that reaches the target (the result is
+  // then fitted to the exact size), within the browser memory cap.
+  function aiPlan(w, h, choice) {
+    const target = upscaleSize(w, h, choice);
+    if (!target) return null;
+    const need = target[0] / w;
+    let scale = need <= 2 ? 2 : 4;
+    if (scale === 4 && w * h * 16 / 1e6 > AI_MAX_OUTPUT_MP) scale = 2;
+    if (w * h * scale * scale / 1e6 > AI_MAX_OUTPUT_MP) return { target, scale: 0 };
+    return { target, scale };
+  }
+
   function updateUpscaleHint() {
     const hint = $("upscale-size");
     if (!imageSize) { hint.textContent = ""; return; }
     const { w, h } = imageSize;
     const choice = form.elements.upscale.value;
     if (useAI()) {
-      const n = Number(choice);
       const problem = aiSizeProblem();
-      hint.textContent = problem || `النتيجة: ${ltr(`${w}×${h} → ${w * n}×${h * n}`)}`;
+      const plan = aiPlan(w, h, choice);
+      hint.textContent = problem || `النتيجة: ${ltr(`${w}×${h} → ${plan.target[0]}×${plan.target[1]}`)} (ذكاء اصطناعي ×${plan.scale})`;
       return;
     }
     const out = upscaleSize(w, h, choice);
@@ -181,6 +196,15 @@
       : choice === "none" ? `المقاس: ${ltr(`${w}×${h}`)} (بدون تغيير)` : `المقاس ${ltr(`${w}×${h}`)} كبير أصلًا، ما يحتاج تكبير`;
   }
   form.elements.upscale.addEventListener("change", updateUpscaleHint);
+
+  function updateResolutionHint() {
+    const limits = config.video_seconds_by_resolution || { "2k": 90, "4k": 30 };
+    const v = form.elements.resolution.value;
+    $("resolution-hint").textContent = limits[v]
+      ? `على الموقع للمقاطع حتى ${limits[v]} ثانية، وتأخذ وقت أطول.`
+      : "";
+  }
+  form.elements.resolution.addEventListener("change", updateResolutionHint);
 
   // ---------- AI (runs in the browser on the visitor's GPU) ----------
   const aiToggle = form.elements.ai;
@@ -202,13 +226,13 @@
   }
   aiToggle.addEventListener("change", () => { if (aiToggle.checked) rememberAiFailed(false); });
 
-  // The AI models only do ×2 and ×4, so the other upscale choices are disabled while AI is on.
+  // AI always enlarges, so "كما هي" is the only choice it can't serve.
   function syncAiControls() {
     const on = useAI();
     $("ai-options").hidden = !on;
     const select = form.elements.upscale;
-    [...select.options].forEach((o) => { o.disabled = on && !["2", "4"].includes(o.value); });
-    if (on && !["2", "4"].includes(select.value)) select.value = "2";
+    [...select.options].forEach((o) => { o.disabled = on && o.value === "none"; });
+    if (on && select.value === "none") select.value = "2k";
     // The AI model already removes noise and restores edges; extra denoise/sharpen would only hurt.
     ["denoise", "sharpness"].forEach((k) => { form.elements[k].disabled = on; });
     updateUpscaleHint();
@@ -225,7 +249,8 @@
     if (!useAI()) { if (!aiFailedHere()) status.textContent = ""; return; }
     const token = ++warmToken;
     const model = form.elements.ai_model.value;
-    const scale = Number(form.elements.upscale.value);
+    const plan = imageSize && aiPlan(imageSize.w, imageSize.h, form.elements.upscale.value);
+    const scale = plan && plan.scale ? plan.scale : 2;
     VCAI.prepare(model, scale, (text) => { if (token === warmToken) status.textContent = `⏳ ${text}`; })
       .then(() => { if (token === warmToken) status.textContent = "✅ النموذج جاهز على كرت الشاشة"; })
       .catch(() => { if (token === warmToken) status.textContent = ""; }); // the real run reports errors
@@ -234,12 +259,10 @@
   // Returns an Arabic message if the image is too big for an AI upscale, else "".
   function aiSizeProblem() {
     if (!useAI() || !imageSize) return "";
-    const scale = Number(form.elements.upscale.value);
-    const outMP = (imageSize.w * scale) * (imageSize.h * scale) / 1e6;
-    if (outMP <= AI_MAX_OUTPUT_MP) return "";
-    return scale === 4 && imageSize.w * imageSize.h * 4 / 1e6 <= AI_MAX_OUTPUT_MP
-      ? "الصورة كبيرة على ×4 بالذكاء الاصطناعي. اختر ×2."
-      : "الصورة كبيرة على التكبير بالذكاء الاصطناعي. استخدم التكبير العادي.";
+    const plan = aiPlan(imageSize.w, imageSize.h, form.elements.upscale.value);
+    if (!plan) return `الصورة ${ltr(`${imageSize.w}×${imageSize.h}`)} أكبر من هذا المقاس أصلًا. اختر مقاس أكبر أو ×2.`;
+    if (!plan.scale) return "الصورة كبيرة على التكبير بالذكاء الاصطناعي. طفّه واستخدم التكبير العادي.";
+    return "";
   }
 
   function collectOptions() {
@@ -274,6 +297,7 @@
     show("work");
     aiInfo = "";
     resultNote = "";
+    resent = false;
     const options = collectOptions();
 
     if (!useAI()) {
@@ -289,7 +313,7 @@
     try {
       result = await VCAI.upscale(file, {
         model: options.ai_model,
-        scale: Number(options.upscale),
+        scale: aiPlan(imageSize.w, imageSize.h, options.upscale).scale,
         signal: aiAbort.signal,
         onProgress: (f, stage) => setProgress(f, `${stage} ${f > 0 ? Math.round(f * 100) + "%" : ""}`, f === 0),
       });
@@ -308,7 +332,17 @@
       return send(file, file.name, { ...options, upscale: options.upscale });
     }
     aiAbort = null;
-    aiInfo = `✨ ${result.label} ×${options.upscale} على كرت الشاشة (${result.backend})`;
+    const plan = aiPlan(imageSize.w, imageSize.h, options.upscale);
+    aiInfo = `✨ ${result.label} ×${plan.scale} على كرت الشاشة (${result.backend})`;
+    // Fit the AI output to the exact requested size (e.g. ×4 model → 4K box, or ×3).
+    if (result.canvas.width !== plan.target[0] || result.canvas.height !== plan.target[1]) {
+      const fitted = document.createElement("canvas");
+      [fitted.width, fitted.height] = plan.target;
+      const fctx = fitted.getContext("2d");
+      fctx.imageSmoothingQuality = "high";
+      fctx.drawImage(result.canvas, 0, 0, fitted.width, fitted.height);
+      result.canvas = fitted;
+    }
     const stem = file.name.replace(/\.[^.]+$/, "") || "image";
 
     // 2) Colours + saving happen right here: no upload, no queue, no download.
@@ -388,31 +422,102 @@
     });
   }
 
-  function send(body, filename, options) {
-    setProgress(0, "جاري الرفع… 0%");
-    const params = new URLSearchParams({ filename, options: JSON.stringify(options) });
-    upload = new XMLHttpRequest();
-    upload.open("POST", `/api/jobs?${params}`);
-    upload.setRequestHeader("Content-Type", "application/octet-stream");
-    upload.upload.onprogress = (e) => {
-      if (e.lengthComputable) setProgress(e.loaded / e.total * 0.3, `جاري الرفع… ${Math.round(e.loaded / e.total * 100)}%`);
-    };
-    upload.onload = () => {
-      $("start").disabled = false;
-      let data = {};
-      try { data = JSON.parse(upload.responseText); } catch { /* non-JSON error page */ }
-      upload = null;
-      if (data.id) {
-        jobId = data.id;
-        store.set({ id: jobId, kind, name: file.name });
-        poll();
-      } else {
-        fail(data.error || "تعذّر رفع الملف. تحقق من الاتصال وحاول مرة ثانية.");
+  // ---------- Reliable upload ----------
+  // Mobile connections drop, and Render's free instance sleeps after 15 min and restarts on
+  // deploys. So: wake the server first, send the file in 1 MB chunks, retry any chunk that
+  // fails, and start over by itself if the server lost the upload (restart).
+  let uploadAbort = null;
+  let lastSend = null; // { body, filename, options } for one automatic re-send
+  let resent = false;
+  const sleep = (ms, signal) => new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("cancelled", "AbortError")); }, { once: true });
+  });
+
+  class UploadError extends Error {}
+
+  // fetch + JSON with retries for network errors and proxy hiccups (502/504, or HTML pages).
+  async function api(method, url, body, signal) {
+    let wait = 1000;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const r = await fetch(url, { method, body, signal, cache: "no-store", headers: body ? { "Content-Type": "application/octet-stream" } : {} });
+        let data = null;
+        try { data = await r.json(); } catch { /* proxy error page */ }
+        if (data && (r.ok || r.status < 500 || r.status === 503)) return { status: r.status, data };
+      } catch (err) {
+        if (err.name === "AbortError") throw err;
       }
-    };
-    upload.onerror = () => { upload = null; $("start").disabled = false; fail("انقطع الاتصال أثناء الرفع. حاول مرة ثانية."); };
-    upload.onabort = () => { upload = null; $("start").disabled = false; show("setup"); };
-    upload.send(body);
+      if (attempt >= 6) throw new UploadError("الاتصال بالخادم ضعيف أو مقطوع. تحقق من الإنترنت وحاول مرة ثانية.");
+      await sleep(wait, signal);
+      wait = Math.min(wait * 2, 15000);
+    }
+  }
+
+  async function wakeServer(signal) {
+    const t0 = Date.now();
+    for (;;) {
+      try {
+        const r = await fetch("/healthz", { cache: "no-store", signal });
+        if (r.ok) return;
+      } catch (err) { if (err.name === "AbortError") throw err; }
+      if (Date.now() - t0 > 120000) throw new UploadError("الخادم ما رد. حاول بعد دقيقة.");
+      setProgress(0, "تشغيل الخادم… (أول مرة بعد فترة يأخذ حتى دقيقة)", true);
+      await sleep(3000, signal);
+    }
+  }
+
+  async function uploadFile(body, filename, options, signal) {
+    await wakeServer(signal);
+    for (let round = 1; ; round++) {
+      const q = new URLSearchParams({ filename, size: String(body.size) });
+      const begin = await api("POST", `/api/uploads?${q}`, null, signal);
+      if (begin.status !== 201) throw new UploadError(begin.data.error || "تعذّر بدء الرفع.");
+      const id = begin.data.upload_id;
+      const chunk = begin.data.chunk_size;
+      let offset = 0;
+      let lost = false;
+      while (offset < body.size) {
+        let bytes;
+        try {
+          bytes = await body.slice(offset, offset + chunk).arrayBuffer();
+        } catch {
+          throw new UploadError("تعذّر قراءة الملف من جهازك. اختره مرة ثانية (ولو من «الملفات» بدل المعرض).");
+        }
+        const put = await api("PUT", `/api/uploads/${encodeURIComponent(id)}?offset=${offset}`, bytes, signal);
+        if (put.status === 404) { lost = true; break; } // server restarted: start this file over
+        if (put.status !== 200 && put.status !== 409) throw new UploadError(put.data.error || "تعذّر رفع جزء من الملف.");
+        offset = put.data.received;
+        const f = offset / body.size;
+        setProgress(f * 0.3, `جاري الرفع… ${Math.round(f * 100)}%`);
+      }
+      if (!lost) {
+        const params = new URLSearchParams({ options: JSON.stringify(options) });
+        const done = await api("POST", `/api/uploads/${encodeURIComponent(id)}/finish?${params}`, null, signal);
+        if (done.data && done.data.id) return done.data;
+        if (done.status !== 404) throw new UploadError(done.data.error || "تعذّر إنهاء الرفع.");
+      }
+      if (round >= 3) throw new UploadError("الخادم يعيد التشغيل. حاول بعد دقيقة.");
+      setProgress(0, "الخادم أعاد التشغيل، نعيد الرفع…", true);
+    }
+  }
+
+  async function send(body, filename, options) {
+    lastSend = { body, filename, options };
+    setProgress(0, "جاري الرفع… 0%");
+    uploadAbort = new AbortController();
+    try {
+      const job = await uploadFile(body, filename, options, uploadAbort.signal);
+      jobId = job.id;
+      store.set({ id: jobId, kind, name: file ? file.name : filename });
+      poll();
+    } catch (err) {
+      if (err.name === "AbortError") return show(file ? "setup" : "pick");
+      fail(err instanceof UploadError ? err.message : "تعذّر رفع الملف. تحقق من الاتصال وحاول مرة ثانية.");
+    } finally {
+      uploadAbort = null;
+      $("start").disabled = false;
+    }
   }
 
   async function poll() {
@@ -430,6 +535,12 @@
     }
     if (!response.ok) {
       store.clear();
+      // The free instance restarted and lost the job: send the same file again once.
+      if (response.status === 404 && lastSend && !resent) {
+        resent = true;
+        setProgress(0, "الخادم أعاد التشغيل، نعيد الإرسال…", true);
+        return send(lastSend.body, lastSend.filename, lastSend.options);
+      }
       return fail(job.error || "انتهت صلاحية المهمة. ارفع الملف مرة ثانية.");
     }
 
@@ -452,7 +563,7 @@
 
   $("cancel").addEventListener("click", async () => {
     if (aiAbort) return aiAbort.abort();
-    if (upload) return upload.abort();
+    if (uploadAbort) return uploadAbort.abort();
     clearTimeout(pollTimer);
     if (jobId) {
       try { await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }); } catch { /* best effort */ }
