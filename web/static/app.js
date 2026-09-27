@@ -42,6 +42,7 @@
   let aiAbort = null; // AbortController while the in-browser AI is running
   let aiInfo = ""; // e.g. "Real-CUGAN ×4 • webgpu", shown with the result
   let localResultUrl = null; // blob: URL of a result made on this device (AI mode)
+  let resultNote = ""; // extra line under the result, e.g. why AI was skipped
   const AI_SUPPORTED = Boolean(window.VCAI && VCAI.supported());
   const AI_MAX_OUTPUT_MP = 36; // same cap as the server, keeps browser memory sane
 
@@ -261,6 +262,7 @@
     $("start").disabled = true;
     show("work");
     aiInfo = "";
+    resultNote = "";
     const options = collectOptions();
 
     if (!useAI()) {
@@ -270,6 +272,7 @@
 
     // 1) AI upscale in the browser
     phase = { base: 0, span: 0.9 };
+    setProgress(0, "تجهيز الذكاء الاصطناعي…", true);
     aiAbort = new AbortController();
     let result;
     try {
@@ -280,10 +283,17 @@
         onProgress: (f, stage) => setProgress(f, `${stage} ${f > 0 ? Math.round(f * 100) + "%" : ""}`, f === 0),
       });
     } catch (err) {
-      $("start").disabled = false;
       aiAbort = null;
-      if (err && err.name === "AbortError") return show("setup");
-      return fail(`تعذّر تشغيل الذكاء الاصطناعي على جهازك: ${err && err.message ? err.message : err}. جرّب التكبير العادي.`);
+      if (err && err.name === "AbortError") { $("start").disabled = false; return show("setup"); }
+      // AI can't run in this browser (no GPU access, a hanging in-app browser, a timeout…):
+      // don't leave the visitor stuck — do the same enlargement with the server's regular upscaler.
+      console.warn("AI upscale failed, falling back to the server:", err);
+      aiToggle.checked = false;
+      syncAiControls();
+      $("ai-status").textContent = "⚠️ الذكاء الاصطناعي ما اشتغل في هذا المتصفح، فاستخدمنا التكبير العادي.";
+      resultNote = "تم بالتكبير العادي لأن الذكاء الاصطناعي ما اشتغل في هذا المتصفح (جرّب Chrome مباشرة).";
+      phase = { base: 0, span: 1 };
+      return send(file, file.name, { ...options, upscale: options.upscale });
     }
     aiAbort = null;
     aiInfo = `✨ ${result.label} ×${options.upscale} على كرت الشاشة (${result.backend})`;
@@ -469,6 +479,7 @@
     if (aiInfo && imageSize && info.width) {
       $("done-info").textContent = `الأصل: ${ltr(`${imageSize.w}×${imageSize.h}`)} • النتيجة: ${ltr(`${info.width}×${info.height}`)} • ${aiInfo}`;
     }
+    if (resultNote) $("done-info").textContent += ` • ${resultNote}`;
     $("tweak").hidden = !file;
     show("done");
   }
