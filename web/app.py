@@ -17,6 +17,7 @@ Routes
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,7 +28,7 @@ from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import jobs, media
+from . import aivideo, jobs, media
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
@@ -64,6 +65,9 @@ async def config(_: Request) -> JSONResponse:
             "video_seconds_by_resolution": jobs.VIDEO_SECONDS_BY_RESOLUTION,
             "video_4k": jobs.VIDEO_4K_OK,
             "long_video_seconds": jobs.LONG_VIDEO_SECONDS,
+            "ai_video": {"max_seconds": aivideo.MAX_SECONDS, "fps": list(aivideo.FPS_CHOICES),
+                         "default_fps": aivideo.DEFAULT_FPS, "sizes": list(aivideo.SIZE_CHOICES),
+                         "default_size": aivideo.DEFAULT_SIZE},
             "result_ttl_seconds": jobs.RESULT_TTL,
             "max_output_megapixels": jobs.MAX_OUTPUT_MEGAPIXELS,
             "accept": sorted(jobs.ALLOWED_SUFFIXES),
@@ -243,6 +247,69 @@ async def job_result(request: Request):
     )
 
 
+# ---------- AI video: frames go to the browser and come back upscaled ----------
+MAX_FRAME_BYTES = 8 * 1024 * 1024
+
+
+def _ai_job(request: Request):
+    job = manager.get(request.path_params["job_id"])
+    if not job or not job.ai or job.status != "awaiting_ai":
+        return None, None
+    n = request.path_params.get("n")
+    if n is not None and not 1 <= n <= job.ai["frames"]:
+        return job, -1
+    return job, n
+
+
+async def frame_get(request: Request):
+    job, n = _ai_job(request)
+    if not job or n == -1:
+        return error("الإطار غير موجود.", 404)
+    job.touched = time.time()
+    return FileResponse(aivideo.frame_path(job.folder, "frames", n), media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
+
+async def frame_put(request: Request) -> JSONResponse:
+    job, n = _ai_job(request)
+    if not job or n == -1:
+        return error("الإطار غير موجود.", 404)
+    body = await request.body()
+    if not body or len(body) > MAX_FRAME_BYTES or not body.startswith(b"\xff\xd8"):
+        return error("إطار غير صالح (المطلوب JPEG).", 400)
+    target = aivideo.frame_path(job.folder, "up", n)
+    tmp = target.with_suffix(".part")
+    tmp.write_bytes(body)
+    tmp.replace(target)  # a retried or cut-off upload never leaves half a frame
+    manager.frame_received(job, n)
+    return JSONResponse({"done": len(job.frames_done), "next_missing": job.next_missing()})
+
+
+async def ai_assemble(request: Request) -> JSONResponse:
+    job = manager.get(request.path_params["job_id"])
+    if not job:
+        return error("المهمة غير موجودة.", 404)
+    if job.status == "awaiting_ai" and not manager.start_assemble(job):
+        return JSONResponse({"error": "باقي إطارات ما وصلت.", "next_missing": job.next_missing()}, status_code=409)
+    return JSONResponse(job.public(manager.position(job)))  # also answers a retried request
+
+
+async def ai_regular(request: Request) -> JSONResponse:
+    job = manager.get(request.path_params["job_id"])
+    if not job:
+        return error("المهمة غير موجودة.", 404)
+    if job.status == "awaiting_ai" and not manager.start_regular(job):
+        return error("ما قدرت أبدأ المعالجة العادية.", 409)
+    return JSONResponse(job.public(manager.position(job)))
+
+
+async def job_before(request: Request):
+    job = _job_or_404(request)
+    if not job or not job.before or not job.before.is_file():
+        return error("غير متوفر.", 404)
+    return FileResponse(job.before, media_type="video/mp4", headers={"Cache-Control": "private, max-age=3600"})
+
+
 class SecurityHeaders:
     def __init__(self, app) -> None:
         self.app = app
@@ -299,6 +366,11 @@ routes = [
     Route("/api/jobs/{job_id}", job_status),
     Route("/api/jobs/{job_id}/cancel", job_cancel, methods=["POST"]),
     Route("/api/jobs/{job_id}/result", job_result),
+    Route("/api/jobs/{job_id}/before", job_before),
+    Route("/api/jobs/{job_id}/frames/{n:int}", frame_get, methods=["GET"]),
+    Route("/api/jobs/{job_id}/frames/{n:int}", frame_put, methods=["PUT"]),
+    Route("/api/jobs/{job_id}/assemble", ai_assemble, methods=["POST"]),
+    Route("/api/jobs/{job_id}/regular", ai_regular, methods=["POST"]),
     Route("/about", about_redirect),
     Mount("/about", StaticFiles(directory=ROOT / "docs", html=True), name="about"),
     Mount("/static", StaticFiles(directory=STATIC), name="static"),

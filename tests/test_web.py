@@ -194,6 +194,23 @@ class ServerVideoPipelineTests(unittest.TestCase):
             self.assertEqual(jobs.server_memory_mb(), 512)
 
 
+class AiVideoPlanTests(unittest.TestCase):
+    def test_phone_friendly_rate_and_size(self):
+        from web import aivideo
+        info = parse_ffmpeg_info(HLG_BANNER, Path("IMG.MOV"), 1)  # 4K 60 fps, portrait
+        p = aivideo.plan(info, {"ai_fps": 15, "ai_size": "720p"})
+        self.assertEqual((p["fps"], p["width"], p["height"]), (15, 360, 640))
+        self.assertEqual((p["out_width"], p["out_height"]), (720, 1280))
+        self.assertEqual(p["frames"], 8 * 15 + 1)
+
+    def test_never_above_the_source_and_whitelisted(self):
+        from web import aivideo
+        info = _video(width=320, height=240, fps=10.0, duration=3.0)
+        p = aivideo.plan(info, {"ai_fps": 999, "ai_size": "8k"})
+        self.assertEqual(p["fps"], 10)  # 999 → default 15 → capped by the 10 fps source
+        self.assertEqual((p["width"], p["height"]), (320, 240))  # already below 360p: no upscale here
+
+
 try:  # the HTTP tests need httpx (Starlette's TestClient); skip them where it isn't installed
     from starlette.testclient import TestClient
 except Exception:  # pragma: no cover
@@ -238,6 +255,48 @@ class ResumableUploadTests(unittest.TestCase):
     def test_unknown_upload_asks_the_browser_to_restart(self):
         r = self.client.put("/api/uploads/nope?offset=0", content=b"x")
         self.assertEqual((r.status_code, r.json().get("restart")), (404, True))
+
+    def _ai_job(self, frames=3):
+        from web import aivideo, jobs as J
+        job_id, source = self.webapp.manager.new_upload("clip.mp4")
+        source.write_bytes(b"x")
+        job = J.Job(id=job_id, filename="clip.mp4", folder=source.parent, source=source, options={})
+        (job.folder / "frames").mkdir()
+        (job.folder / "up").mkdir()
+        for n in range(1, frames + 1):
+            aivideo.frame_path(job.folder, "frames", n).write_bytes(b"\xff\xd8frame")
+        job.ai = {"fps": 15, "width": 8, "height": 8, "frames": frames, "out_width": 16, "out_height": 16}
+        job.status, job.phase = "awaiting_ai", "frames"
+        with self.webapp.manager._lock:
+            self.webapp.manager._jobs[job_id] = job
+        return job
+
+    def test_ai_frames_round_trip(self):
+        job = self._ai_job()
+        base = f"/api/jobs/{job.id}"
+        self.assertEqual(self.client.get(f"{base}/frames/1").content, b"\xff\xd8frame")
+        self.assertEqual(self.client.get(f"{base}/frames/9").status_code, 404)
+        self.assertEqual(self.client.put(f"{base}/frames/1", content=b"not a jpeg").status_code, 400)
+        r = self.client.put(f"{base}/frames/1", content=b"\xff\xd8up")
+        self.assertEqual(r.json(), {"done": 1, "next_missing": 2})
+        # assembling before every frame is back is refused and says what is missing
+        early = self.client.post(f"{base}/assemble")
+        self.assertEqual((early.status_code, early.json()["next_missing"]), (409, 2))
+        for n in (3, 2):
+            last = self.client.put(f"{base}/frames/{n}", content=b"\xff\xd8up")
+        self.assertEqual(last.json(), {"done": 3, "next_missing": None})
+        with unittest.mock.patch.object(self.webapp.manager, "_queue"):
+            ok = self.client.post(f"{base}/assemble")
+        self.assertEqual((ok.status_code, ok.json()["status"]), (200, "queued"))
+        self.assertEqual(job.phase, "assemble")
+
+    def test_ai_fallback_to_regular(self):
+        job = self._ai_job()
+        with unittest.mock.patch.object(self.webapp.manager, "_queue"):
+            r = self.client.post(f"/api/jobs/{job.id}/regular")
+        self.assertEqual(r.json()["status"], "queued")
+        self.assertFalse(job.options["ai_video"])
+        self.assertFalse((job.folder / "frames").exists())
 
     def test_limits(self):
         self.assertEqual(self.client.post("/api/uploads?filename=a.exe&size=10").status_code, 415)

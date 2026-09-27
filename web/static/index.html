@@ -67,7 +67,7 @@
         </div>
       </fieldset>
 
-      <fieldset class="ai-box" data-only="image" aria-describedby="ai-hint">
+      <fieldset class="ai-box" aria-describedby="ai-hint">
         <legend>✨ الذكاء الاصطناعي</legend>
         <label class="switch"><input type="checkbox" name="ai" id="ai-toggle" checked> <span>تكبير واستعادة التفاصيل بالذكاء الاصطناعي</span></label>
         <div class="field" id="ai-options">
@@ -78,6 +78,23 @@
             <option value="anime_extreme">أنمي بأقصى تفاصيل — Real-CUGAN</option>
             <option value="anime_clean">أنمي + تنظيف قوي — Real-CUGAN Denoise</option>
           </select>
+        </div>
+        <div class="grid ai-video-fields" id="ai-video-fields" hidden>
+          <div class="field">
+            <label for="ai_fps">إطارات في الثانية</label>
+            <select id="ai_fps" name="ai_fps">
+              <option value="12">12 (الأخف على الجوال)</option>
+              <option value="15" selected>15</option>
+              <option value="24">24 (أنعم، أثقل)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="ai_size">دقة النتيجة</label>
+            <select id="ai_size" name="ai_size">
+              <option value="720p" selected>720p (أخف)</option>
+              <option value="1080p">1080p (أثقل)</option>
+            </select>
+          </div>
         </div>
         <p id="ai-status" class="ai-status" aria-live="polite"></p>
         <p id="ai-hint" class="hint">نفس نماذج نسخة ويندوز، وتشتغل على كرت الشاشة في جهازك (WebGPU/WebGL)، والنتيجة تنحفظ على جهازك مباشرة بدون رفع. النموذج يتجهّز وأنت تختار الإعدادات.</p>
@@ -207,18 +224,27 @@
 
       <div class="compare" id="compare-view">
         <img id="after-img" alt="بعد التحسين" draggable="false">
-        <div class="compare-before" id="before-wrap"><img id="before-img" alt="قبل التحسين" draggable="false"></div>
+        <video id="after-vid" playsinline preload="metadata" hidden></video>
+        <div class="compare-before" id="before-wrap">
+          <img id="before-img" alt="قبل التحسين" draggable="false">
+          <video id="before-vid" muted playsinline preload="metadata" hidden></video>
+        </div>
         <span class="tag tag-before">قبل</span><span class="tag tag-after">بعد</span>
         <div class="split" id="split" role="slider" tabindex="0" aria-label="خط المقارنة بين قبل وبعد"
              aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"><span class="knob" aria-hidden="true">⟷</span></div>
       </div>
+      <div class="player" hidden>
+        <button type="button" class="tool play" id="play-toggle" aria-label="تشغيل" data-state="paused">
+          <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14l11-7z"/></svg>
+          <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h3v14H8zM13 5h3v14h-3z"/></svg>
+        </button>
+        <input type="range" id="seek" min="0" max="1000" value="0" aria-label="موضع التشغيل">
+        <output id="clock" class="clock">0:00</output>
+      </div>
       <p class="hint viewer-hint">اسحب الخط للمقارنة • دبل كليك أو Ctrl + العجلة أو قرصة الإصبعين للتكبير • اسحب الصورة للتنقل</p>
     </div>
 
-    <div id="compare-video" class="videos" hidden>
-      <figure><video id="before-video" controls muted playsinline preload="metadata"></video><figcaption>قبل</figcaption></figure>
-      <figure><video id="after-video" controls playsinline preload="metadata"></video><figcaption>بعد</figcaption></figure>
-    </div>
+
 
     <p id="done-info" class="muted"></p>
     <div class="actions">
@@ -241,7 +267,7 @@
 </main>
 
 <footer class="wrap foot">
-  <p>مبني على FFmpeg. الملفات تُحذف من الخادم تلقائيًا بعد ساعة.</p>
+  <p>مبني على FFmpeg. الملفات تُحذف من الخادم تلقائيًا بعد 6 ساعات.</p>
 </footer>
 </body>
 </html>

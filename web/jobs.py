@@ -26,13 +26,14 @@ from video_engine import (
     IMAGE_SUFFIXES,
     MediaInfo,
     VideoEngineError,
+    _color_filters,
     build_audio_filters,
     build_image_ffmpeg_command,
     build_video_filters,
     find_binary,
 )
 
-from . import media
+from . import aivideo, media
 
 # --- Limits (override with environment variables on Render) -------------------
 
@@ -110,6 +111,13 @@ class Job:
     kill: object = None  # stops every FFmpeg process of the running job
     process: subprocess.Popen | None = None
     cancel_requested: bool = False
+    # AI video (web/aivideo.py): "" → normal job; "frames" → waiting for the browser;
+    # "assemble" → queued/running the final join.
+    phase: str = ""
+    ai: dict = field(default_factory=dict)  # frame plan: fps, width, height, frames, out size
+    frames_done: set = field(default_factory=set)
+    touched: float = field(default_factory=time.time)  # last browser activity (frames)
+    before: Path | None = None  # small "before" clip for the comparison
 
     def public(self, position: int | None) -> dict:
         return {
@@ -123,7 +131,15 @@ class Job:
             "download_name": self.download_name,
             "queue_position": position,
             "eta": self.eta if self.status == "running" else None,
+            "ai": self._ai_public() if self.ai else None,
+            "has_before": bool(self.before and self.before.is_file()),
         }
+
+    def next_missing(self) -> int | None:
+        return next((n for n in range(1, self.ai.get("frames", 0) + 1) if n not in self.frames_done), None)
+
+    def _ai_public(self) -> dict:
+        return {**self.ai, "done": len(self.frames_done), "next_missing": self.next_missing()}
 
 
 class QueueFull(Exception):
@@ -319,6 +335,13 @@ def normalize_command(source, output, info: MediaInfo, resolution: str, transfer
     ]
 
 
+def _frames_info(job: Job, p: dict) -> MediaInfo:
+    """MediaInfo describing the upscaled frames (for settings/filters at assembly)."""
+    return MediaInfo(path=str(job.folder / "up"), width=p["out_width"], height=p["out_height"],
+                     fps=float(p["fps"]), duration=p["frames"] / p["fps"], size_bytes=0,
+                     video_codec="mjpeg", audio_codec="aac", format_name="image2")
+
+
 def disk_has_room(size_bytes: int) -> bool:
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
     return shutil.disk_usage(WORK_ROOT).free > size_bytes * DISK_HEADROOM
@@ -375,7 +398,10 @@ class JobManager:
 
     def cancel(self, job: Job) -> None:
         job.cancel_requested = True
-        if job.status == "queued":
+        if job.status == "awaiting_ai":
+            self._finish(job, "cancelled", "تم الإلغاء.")
+            job.source.unlink(missing_ok=True)
+        elif job.status == "queued":
             self._finish(job, "cancelled", "تم الإلغاء.")
             job.source.unlink(missing_ok=True)
         elif job.kill:
@@ -399,15 +425,21 @@ class JobManager:
             if not job or job.status != "queued":
                 continue
             job.status = "running"
-            job.message = "جاري تحليل الملف…"
+            job.message = "جاري تحليل الملف…" if job.phase != "assemble" else "جاري تجميع الفيديو…"
             try:
-                self._run(job)
+                if job.phase == "assemble":
+                    self._assemble(job)
+                else:
+                    self._run(job)
             except VideoEngineError as exc:
                 self._finish(job, "error", str(exc))
             except Exception as exc:  # keep the worker alive no matter what
                 self._finish(job, "error", f"حدث خطأ غير متوقع: {exc}")
             finally:
-                job.source.unlink(missing_ok=True)
+                # An AI video still needs the original for its audio (and a possible
+                # fallback to regular processing) while the browser upscales frames.
+                if job.status != "awaiting_ai":
+                    job.source.unlink(missing_ok=True)
 
     def _run(self, job: Job) -> None:
         info, extras = media.probe_details(job.source)
@@ -442,6 +474,8 @@ class JobManager:
                 f"دقة {settings.resolution.upper()} على الموقع للمقاطع حتى {big_limit} ثانية "
                 "(الخادم المجاني محدود). اختر 1080p أو استخدم نسخة ويندوز."
             )
+        if not info.is_image and job.options.get("ai_video"):
+            return self._extract_for_ai(job, info, settings, extras)
         stem = _safe_stem(job.filename)
         if info.is_image:
             fmt = job.options.get("image_format")
@@ -490,6 +524,88 @@ class JobManager:
 
         job.output = output
         job.download_name = f"{stem}-videocraft{suffix}"
+        job.progress = 1.0
+        self._finish(job, "done", "جاهز للتحميل.")
+
+    # --- AI video (see web/aivideo.py) ---------------------------------------
+
+    def _extract_for_ai(self, job: Job, info: MediaInfo, settings: ExportSettings, extras: dict) -> None:
+        if info.duration > aivideo.MAX_SECONDS:
+            raise VideoEngineError(
+                f"الذكاء الاصطناعي للفيديو للمقاطع حتى {aivideo.MAX_SECONDS} ثانية (عشان ما يتعب جوالك). "
+                "طفّه لهذا المقطع أو قصّه."
+            )
+        p = aivideo.plan(info, job.options)
+        if p["frames"] > aivideo.MAX_FRAMES:
+            raise VideoEngineError("عدد الإطارات كبير على الذكاء الاصطناعي. اختر إطارات أقل أو قصّ المقطع.")
+        frames_dir = job.folder / "frames"
+        frames_dir.mkdir(exist_ok=True)
+        (job.folder / "up").mkdir(exist_ok=True)
+        job.message = "تجهيز الإطارات لجهازك…"
+        self._execute(job, aivideo.extract_command(job.source, frames_dir, p, extras["transfer"]),
+                      info.duration, span=(0.0, 0.8))
+        if job.cancel_requested:
+            self._finish(job, "cancelled", "تم الإلغاء.")
+            return
+        p["frames"] = len(list(frames_dir.glob("*.jpg")))
+        if not p["frames"]:
+            raise VideoEngineError("ما قدرت أستخرج إطارات من هذا الفيديو.")
+        before = job.folder / "before.mp4"
+        self._execute(job, aivideo.before_command(frames_dir, p, before), p["frames"] / p["fps"], span=(0.8, 1.0))
+        job.before = before if before.is_file() else None
+        job.ai = p
+        job.phase = "frames"
+        job.progress = 0.0
+        job.touched = time.time()
+        job.status = "awaiting_ai"
+        job.message = "جهازك يحسّن الإطارات بالذكاء الاصطناعي…"
+        job.process = job.kill = None
+
+    def frame_received(self, job: Job, n: int) -> None:
+        job.frames_done.add(n)
+        job.touched = time.time()
+
+    def start_assemble(self, job: Job) -> bool:
+        """Queue the final join once every frame is back. False if frames are missing."""
+        if job.status != "awaiting_ai" or job.next_missing() is not None:
+            return False
+        job.phase = "assemble"
+        job.status = "queued"
+        job.message = "في الانتظار…"
+        self._queue.put(job.id)
+        return True
+
+    def start_regular(self, job: Job) -> bool:
+        """AI didn't work on this device: process the same upload the normal way."""
+        if job.status != "awaiting_ai" or not job.source.is_file():
+            return False
+        job.options = {**job.options, "ai_video": False}
+        job.phase, job.ai, job.frames_done, job.before = "", {}, set(), None
+        shutil.rmtree(job.folder / "frames", ignore_errors=True)
+        shutil.rmtree(job.folder / "up", ignore_errors=True)
+        job.status = "queued"
+        job.message = "في الانتظار…"
+        self._queue.put(job.id)
+        return True
+
+    def _assemble(self, job: Job) -> None:
+        p = job.ai
+        settings = settings_from_options({**job.options, "priority": "quality"}, _frames_info(job, p))
+        colour = _color_filters(settings)
+        if settings.stabilize:
+            colour = ["deshake=rx=16:ry=16:edge=mirror:blocksize=8:contrast=125:search=less"] + colour
+        output = job.folder / "result.mp4"
+        self._execute(job, aivideo.assemble_command(job.folder / "up", job.source, p, settings, output, colour),
+                      p["frames"] / p["fps"])
+        if job.cancel_requested:
+            self._finish(job, "cancelled", "تم الإلغاء.")
+            return
+        if not output.is_file() or output.stat().st_size == 0:
+            raise VideoEngineError("ما قدرت أجمّع الفيديو. جرّب مرة ثانية.")
+        shutil.rmtree(job.folder / "up", ignore_errors=True)  # the result holds them now
+        job.output = output
+        job.download_name = f"{_safe_stem(job.filename)}-videocraft-ai.mp4"
+        job.info["output_width"], job.info["output_height"] = p["out_width"], p["out_height"]
         job.progress = 1.0
         self._finish(job, "done", "جاهز للتحميل.")
 
@@ -571,7 +687,11 @@ class JobManager:
         while True:
             time.sleep(240)
             with self._lock:
-                busy = any(job.status in ("queued", "running") for job in self._jobs.values())
+                busy = any(
+                    job.status in ("queued", "running")
+                    or (job.status == "awaiting_ai" and time.time() - job.touched < 900)
+                    for job in self._jobs.values()
+                )
             if busy:
                 try:
                     urllib.request.urlopen(url.rstrip("/") + "/healthz", timeout=20).close()
@@ -585,7 +705,8 @@ class JobManager:
             with self._lock:
                 expired = [
                     job for job in self._jobs.values()
-                    if job.finished and now - job.finished > RESULT_TTL
+                    if (job.finished and now - job.finished > RESULT_TTL)
+                    or (job.status == "awaiting_ai" and now - job.touched > RESULT_TTL)
                 ]
                 for job in expired:
                     del self._jobs[job.id]
