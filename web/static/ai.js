@@ -12,6 +12,11 @@
 //  • prepare() downloads the model and compiles the GPU shaders ahead of time,
 //    while the visitor is still choosing settings.
 //
+// Robustness: every step that talks to the browser (script loads, GPU backend,
+// model download, first GPU run) has a time limit, because some in-app browsers
+// leave such calls hanging forever instead of failing. A timeout rejects, and the
+// page then falls back to the server's regular upscaling.
+//
 // Usage:
 //   VCAI.prepare("photo", 2, onStatus);                 // optional warm-up
 //   const { canvas } = await VCAI.upscale(file, { model, scale, onProgress, signal });
@@ -32,17 +37,25 @@ window.VCAI = (() => {
   };
 
   let runtime = null; // Promise<backend name>
-  const prepared = new Map(); // model path → Promise<GraphModel> (downloaded + shaders compiled)
+  const prepared = new Map(); // model path → { promise, listeners, last } (downloaded + shaders compiled)
+
+  function withTimeout(promise, ms, message) {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+    ]).finally(() => clearTimeout(timer));
+  }
 
   // ---------- Runtime ----------
   function loadScript(src) {
-    return new Promise((resolve, reject) => {
+    return withTimeout(new Promise((resolve, reject) => {
       const s = document.createElement("script");
       s.src = src;
       s.onload = resolve;
       s.onerror = () => reject(new Error(`تعذّر تحميل ${src}`));
       document.head.append(s);
-    });
+    }), 45000, "انتهت مهلة تحميل مكتبة الذكاء الاصطناعي");
   }
 
   function ensureRuntime() {
@@ -52,13 +65,14 @@ window.VCAI = (() => {
       if (navigator.gpu) {
         try {
           await loadScript(`${BASE}/vendor/tf-backend-webgpu.min.js`);
-          if (await tf.setBackend("webgpu")) backend = "webgpu";
+          // Some phones expose WebGPU but never answer the adapter request.
+          if (await withTimeout(tf.setBackend("webgpu"), 8000, "webgpu timeout")) backend = "webgpu";
         } catch { /* fall back to WebGL */ }
       }
       if (!backend) {
         // Half-precision textures are about twice as fast on phone GPUs; image quality is unaffected.
         if (/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)) tf.env().set("WEBGL_FORCE_F16_TEXTURES", true);
-        try { if (await tf.setBackend("webgl")) backend = "webgl"; } catch { /* no GPU path */ }
+        try { if (await withTimeout(tf.setBackend("webgl"), 15000, "webgl timeout")) backend = "webgl"; } catch { /* no GPU path */ }
       }
       if (!backend) throw new Error("متصفحك لا يدعم تشغيل الذكاء الاصطناعي على كرت الشاشة (WebGPU / WebGL).");
       await tf.ready();
@@ -68,16 +82,21 @@ window.VCAI = (() => {
     return runtime;
   }
 
-  async function loadModel(path, onFraction) {
-    const cacheKey = `indexeddb://videocraft-${path.replace(/\//g, "-")}`;
-    try {
-      const cached = await tf.loadGraphModel(cacheKey); // saved on an earlier visit
-      onFraction?.(1);
-      return cached;
-    } catch { /* not cached yet */ }
-    const model = await tf.loadGraphModel(`${BASE}/models/${path}/model.json`, { onProgress: onFraction });
-    model.save(cacheKey).catch(() => { /* private mode / quota: fine */ });
-    return model;
+  // The browser's HTTP cache keeps the model for a week (see web/app.py), so no
+  // IndexedDB copy is needed — and IndexedDB is exactly what hangs in some in-app browsers.
+  // The download fails if it makes no progress for 30 s.
+  function loadModel(path, onFraction) {
+    let last = Date.now();
+    let watchdog;
+    const stalled = new Promise((_, reject) => {
+      watchdog = setInterval(() => {
+        if (Date.now() - last > 30000) reject(new Error("توقف تحميل النموذج (الاتصال بطيء أو مقطوع)"));
+      }, 2000);
+    });
+    const load = tf.loadGraphModel(`${BASE}/models/${path}/model.json`, {
+      onProgress: (f) => { last = Date.now(); onFraction?.(f); },
+    });
+    return Promise.race([load, stalled]).finally(() => clearInterval(watchdog));
   }
 
   /**
@@ -88,21 +107,34 @@ window.VCAI = (() => {
   function prepare(model = "photo", scale = 2, onStatus) {
     const spec = MODELS[model] || MODELS.photo;
     const path = spec.path(scale === 4 ? 4 : 2);
-    if (!prepared.has(path)) {
-      const job = (async () => {
-        onStatus?.("تجهيز كرت الشاشة…", null);
+    let entry = prepared.get(path);
+    if (!entry) {
+      // Everyone waiting on this model (warm-up and the real run) sees the same live status.
+      entry = { listeners: new Set(), last: null };
+      const emit = (text, fraction) => {
+        entry.last = [text, fraction];
+        entry.listeners.forEach((fn) => fn(text, fraction));
+      };
+      entry.promise = (async () => {
+        emit("تجهيز كرت الشاشة…", null);
         await ensureRuntime();
-        const graph = await loadModel(path, (f) => onStatus?.(`تحميل النموذج… ${Math.round(f * 100)}%`, f * 0.8));
-        onStatus?.("تسخين كرت الشاشة… (أول مرة فقط)", 0.85);
+        emit("تحميل النموذج… 0%", 0);
+        const graph = await loadModel(path, (f) => emit(`تحميل النموذج… ${Math.round(f * 100)}%`, f * 0.8));
+        emit("تسخين كرت الشاشة… (أول مرة فقط)", 0.85);
         const warm = graph.predict(tf.zeros([1, TILE, TILE, 3])); // compiles every shader once
-        await warm.data();
+        await withTimeout(warm.data(), 90000, "كرت الشاشة لم يستجب");
         warm.dispose();
         return graph;
       })();
-      job.catch(() => prepared.delete(path));
-      prepared.set(path, job);
+      entry.promise.catch(() => prepared.delete(path)); // a later attempt starts fresh
+      prepared.set(path, entry);
     }
-    return prepared.get(path);
+    if (onStatus) {
+      entry.listeners.add(onStatus);
+      if (entry.last) onStatus(...entry.last);
+      entry.promise.finally(() => entry.listeners.delete(onStatus)).catch(() => {});
+    }
+    return entry.promise;
   }
 
   // ---------- Image helpers ----------
@@ -172,7 +204,8 @@ window.VCAI = (() => {
         });
 
         const [, sh, sw] = strip.shape;
-        const pixels = await strip.data(); // the only GPU → JS wait for this group
+        // The only GPU → JS wait for this group; a GPU that stops answering must not hang the page.
+        const pixels = await withTimeout(strip.data(), 60000, "كرت الشاشة توقف عن الاستجابة");
         strip.dispose();
 
         const dx = first * STEP * scale;
