@@ -80,18 +80,20 @@
 
 كل القراءة والمعالجة والتصدير تتم على الجهاز. لا يحتوي البرنامج على رفع سحابي أو تتبع.
 
-## نشر صفحة الموقع على Render
+## نسخة الويب (Render)
 
-صفحة التعريف موجودة في مجلد `docs/`، والملف `render.yaml` يجهّز نشرها كموقع ثابت مجاني:
+الموقع يشغّل البرنامج نفسه من المتصفح: ترفع فيديو أو صورة، تختار الإعدادات، وتحمّل النتيجة.
+يستخدم نفس محرك `video_engine.py` (إزالة التشويش، رفع الدقة، الألوان، تثبيت الاهتزاز، الصوت) عبر FFmpeg مضمّن في حزمة `imageio-ffmpeg`.
 
-1. ادخل [dashboard.render.com](https://dashboard.render.com) ← **New** ← **Blueprint**.
-2. اربط حساب GitHub واختر المستودع `VideoCraftStudio`، ثم اضغط **Apply**.
-3. بعد دقيقة يصير الموقع شغّال على رابط مثل `https://videocraft-studio.onrender.com`.
+- `web/` — الواجهة (`static/`) والخادم (`app.py`) وطابور المعالجة (`jobs.py`).
+- `server.py` — يشغّل الموقع على المنفذ `$PORT`.
+- `/` البرنامج، `/about/` صفحة التعريف، `/healthz` فحص الحالة.
+- نماذج الذكاء الاصطناعي (Video2X / waifu2x) تحتاج كرت شاشة وويندوز، فهي في نسخة ويندوز فقط.
 
-أي تعديل يُدمج في فرع `main` يُنشر تلقائيًا بدون أي خطوة إضافية.
+**الحدود (تتغير من Environment في Render):** `MAX_UPLOAD_MB` (200)، `MAX_VIDEO_SECONDS` (180)، `MAX_IMAGE_MEGAPIXELS` (40)، `RESULT_TTL_SECONDS` (3600).
 
-**لو أنشأت الخدمة يدويًا كـ Web Service (Python):** تشتغل حتى لو كان Start Command هو `0`، لأن `requirements.txt` يثبّت على لينكس أمرًا بهذا الاسم يشغّل `server.py` (من مجلد `deploy/render_start`). والأفضل تضبط الإعدادات من **Settings**:
-- **Build Command:** `true` (ما نحتاج نثبّت PyQt6 على السيرفر)
-- **Start Command:** `python server.py`
+**النشر:** أي دمج في `main` ينشر تلقائيًا. الخدمة الحالية تشتغل حتى لو كان Start Command هو `0`
+(الحزمة في `deploy/render_start` توفر أمرًا بهذا الاسم)، والأفضل ضبطه إلى `python server.py`.
+لإنشاء خدمة جديدة: Render ← New ← Blueprint ← اختر المستودع (يقرأ `render.yaml`).
 
-الملف `server.py` يعرض محتوى `docs/` على المنفذ `$PORT` باستخدام مكتبات بايثون القياسية فقط.
+**تشغيل محلي:** `pip install starlette uvicorn imageio-ffmpeg` ثم `python server.py` وافتح http://localhost:8000

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>استديو ڤيديو كرافت — حسّن الفيديو والصور من المتصفح</title>
+<meta name="description" content="ارفع فيديو أو صورة وحسّنها مباشرة من المتصفح: إزالة التشويش، رفع الدقة، تحسين الألوان والصوت.">
+<meta name="theme-color" content="#101215">
+<link rel="icon" href="/about/videocraft.svg">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">تخطَّ إلى المحتوى</a>
+
+<header class="top">
+  <div class="wrap top-inner">
+    <a class="brand" href="/">
+      <img src="/about/videocraft.svg" alt="" width="36" height="36">
+      <span>استديو ڤيديو كرافت<small>نسخة الويب</small></span>
+    </a>
+    <nav aria-label="روابط">
+      <a href="/about/">عن البرنامج</a>
+      <a href="/about/#install">نسخة ويندوز</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+
+  <!-- ============ 1. Pick a file ============ -->
+  <section id="pick" class="panel" aria-labelledby="pick-title">
+    <h1 id="pick-title">حسّن الفيديو والصور من المتصفح</h1>
+    <p class="lede">ارفع ملفك، اختر الإعدادات، وحمّل النتيجة. إزالة تشويش، رفع دقة، ألوان وصوت أنظف.</p>
+
+    <label id="drop" class="drop" for="file">
+      <input id="file" type="file" class="visually-hidden"
+             accept="video/*,image/*,.mkv,.mts,.heic,.heif,.avif">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="40" height="40"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0 4.5 4.5M12 4 7.5 8.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <strong>اسحب الملف هنا أو اضغط للاختيار</strong>
+      <span id="limits" class="muted">فيديو أو صورة</span>
+    </label>
+    <p id="pick-error" class="alert" role="alert" hidden></p>
+  </section>
+
+  <!-- ============ 2. Settings ============ -->
+  <section id="setup" class="panel" aria-labelledby="setup-title" hidden>
+    <div class="file-row">
+      <div class="thumb" id="thumb"></div>
+      <div class="file-meta">
+        <h2 id="setup-title" class="file-name" dir="auto"></h2>
+        <p class="muted" id="file-size"></p>
+      </div>
+      <button type="button" class="btn btn-ghost" id="change-file">ملف آخر</button>
+    </div>
+
+    <form id="settings" novalidate>
+      <fieldset class="presets">
+        <legend>البداية السريعة</legend>
+        <div class="chips" role="radiogroup">
+          <label class="chip"><input type="radio" name="preset" value="balanced" checked><span>متوازن</span></label>
+          <label class="chip"><input type="radio" name="preset" value="clean"><span>تنظيف قوي</span></label>
+          <label class="chip"><input type="radio" name="preset" value="vivid"><span>ألوان حيّة</span></label>
+          <label class="chip"><input type="radio" name="preset" value="light"><span>لمسة خفيفة</span></label>
+        </div>
+      </fieldset>
+
+      <div class="grid">
+        <div class="field">
+          <label for="resolution">الدقة</label>
+          <select id="resolution" name="resolution"></select>
+        </div>
+
+        <div class="field" data-only="video">
+          <label for="fps">عدد الإطارات</label>
+          <select id="fps" name="fps">
+            <option value="source">كما هو</option>
+            <option value="30">30 إطار</option>
+            <option value="60">60 إطار</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="color_style">نمط الألوان</label>
+          <select id="color_style" name="color_style">
+            <option value="natural">طبيعي</option>
+            <option value="warm">دافئ</option>
+            <option value="bright">مشرق</option>
+            <option value="cinematic">سينمائي</option>
+            <option value="none">بدون</option>
+          </select>
+        </div>
+
+        <div class="field" data-only="image">
+          <label for="image_format">صيغة الصورة</label>
+          <select id="image_format" name="image_format">
+            <option value="png">PNG (بدون فقد)</option>
+            <option value="jpg">JPG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="sliders">
+        <div class="slider"><label for="denoise">إزالة التشويش</label><input type="range" id="denoise" name="denoise" min="0" max="100"><output for="denoise"></output></div>
+        <div class="slider"><label for="sharpness">الحدّة</label><input type="range" id="sharpness" name="sharpness" min="0" max="100"><output for="sharpness"></output></div>
+        <div class="slider"><label for="brightness">السطوع</label><input type="range" id="brightness" name="brightness" min="-50" max="50"><output for="brightness"></output></div>
+        <div class="slider"><label for="contrast">التباين</label><input type="range" id="contrast" name="contrast" min="-50" max="50"><output for="contrast"></output></div>
+        <div class="slider"><label for="saturation">تشبّع الألوان</label><input type="range" id="saturation" name="saturation" min="-50" max="50"><output for="saturation"></output></div>
+        <div class="slider"><label for="quality">الجودة ↔ الحجم</label><input type="range" id="quality" name="quality" min="14" max="30" aria-describedby="quality-hint"><output for="quality"></output></div>
+        <p id="quality-hint" class="hint">رقم أقل = جودة أعلى وملف أكبر.</p>
+      </div>
+
+      <details class="more" data-only="video">
+        <summary>خيارات إضافية للفيديو</summary>
+        <div class="checks">
+          <label><input type="checkbox" name="interpolate"> توليد إطارات ناعمة (أبطأ)</label>
+          <label><input type="checkbox" name="stabilize"> تثبيت الاهتزاز</label>
+          <label><input type="checkbox" name="deinterlace"> إزالة التداخل (فيديو قديم)</label>
+          <label><input type="checkbox" name="audio_normalize" checked> توحيد مستوى الصوت</label>
+          <label><input type="checkbox" name="audio_clean"> تنظيف الصوت من الطنين</label>
+        </div>
+      </details>
+
+      <p class="note">المعالجة تتم على خادم مجاني بقدرة محدودة، فالفيديو قد يأخذ عدة دقائق. نماذج الذكاء الاصطناعي متوفرة في <a href="/about/#install">نسخة ويندوز</a> فقط.</p>
+
+      <button type="submit" class="btn btn-main btn-block" id="start">ابدأ التحسين</button>
+    </form>
+  </section>
+
+  <!-- ============ 3. Progress ============ -->
+  <section id="work" class="panel" aria-labelledby="work-title" hidden>
+    <h2 id="work-title">جاري العمل على ملفك</h2>
+    <div class="progress" role="progressbar" aria-labelledby="work-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar">
+      <span id="bar-fill"></span>
+    </div>
+    <p id="work-status" class="status" aria-live="polite">جاري الرفع…</p>
+    <p class="muted small">تقدر تترك الصفحة مفتوحة؛ النتيجة تبقى متاحة ساعة.</p>
+    <button type="button" class="btn btn-ghost" id="cancel">إلغاء</button>
+  </section>
+
+  <!-- ============ 4. Result ============ -->
+  <section id="done" class="panel" aria-labelledby="done-title" hidden>
+    <h2 id="done-title">النتيجة جاهزة ✨</h2>
+
+    <div id="compare-image" class="compare" hidden>
+      <img id="after-img" alt="بعد التحسين">
+      <div class="compare-before" id="before-wrap"><img id="before-img" alt="قبل التحسين"></div>
+      <span class="tag tag-before">قبل</span><span class="tag tag-after">بعد</span>
+      <input type="range" id="compare-range" min="0" max="100" value="50" aria-label="مقارنة قبل وبعد">
+    </div>
+
+    <div id="compare-video" class="videos" hidden>
+      <figure><video id="before-video" controls muted playsinline preload="metadata"></video><figcaption>قبل</figcaption></figure>
+      <figure><video id="after-video" controls playsinline preload="metadata"></video><figcaption>بعد</figcaption></figure>
+    </div>
+
+    <p id="done-info" class="muted"></p>
+    <div class="actions">
+      <a class="btn btn-main" id="download" href="#" download>تحميل النتيجة</a>
+      <button type="button" class="btn btn-ghost" id="tweak">عدّل الإعدادات</button>
+      <button type="button" class="btn btn-ghost" id="restart">ملف جديد</button>
+    </div>
+  </section>
+
+  <!-- ============ Error ============ -->
+  <section id="failed" class="panel" aria-labelledby="failed-title" hidden>
+    <h2 id="failed-title">تعذّرت المعالجة</h2>
+    <p id="failed-msg" class="alert" role="alert"></p>
+    <div class="actions">
+      <button type="button" class="btn btn-main" id="retry">جرّب مرة ثانية</button>
+      <button type="button" class="btn btn-ghost" id="restart-2">ملف جديد</button>
+    </div>
+  </section>
+
+</main>
+
+<footer class="wrap foot">
+  <p>مبني على FFmpeg. الملفات تُحذف من الخادم تلقائيًا بعد ساعة.</p>
+</footer>
+</body>
+</html>

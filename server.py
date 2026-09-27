@@ -1,41 +1,37 @@
-"""Serve the landing page in docs/ over HTTP (used by Render web services).
-
-The desktop app itself is PyQt6 and cannot run on a server, so this only
-serves the static site. Standard library only — no extra dependencies.
+"""Run the web version of VideoCraft Studio (used by Render).
 
     python server.py            # listens on $PORT (Render sets it) or 8000
+
+The desktop app (app.py, PyQt6) is unchanged; the web app in web/ reuses
+video_engine.py for the same FFmpeg enhancement pipeline, minus the GPU AI models.
 """
 
 from __future__ import annotations
 
 import os
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import sys
 from pathlib import Path
 
-SITE_DIR = Path(__file__).resolve().parent / "docs"
-
-
-class SiteHandler(SimpleHTTPRequestHandler):
-    def end_headers(self) -> None:
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
-        super().end_headers()
-
-    def send_error(self, code, message=None, explain=None):
-        # Unknown paths fall back to the landing page instead of a bare 404.
-        if code == 404 and self.command in ("GET", "HEAD"):
-            self.path = "/index.html"
-            return SimpleHTTPRequestHandler.do_GET(self) if self.command == "GET" else self.do_HEAD()
-        return super().send_error(code, message, explain)
+ROOT = Path(__file__).resolve().parent
 
 
 def main() -> None:
+    sys.path.insert(0, str(ROOT))  # so `video_engine` and `web` import from the checkout
+    os.chdir(ROOT)
+
+    import uvicorn
+
     port = int(os.environ.get("PORT", "8000"))
-    handler = partial(SiteHandler, directory=str(SITE_DIR))
-    server = ThreadingHTTPServer(("0.0.0.0", port), handler)
-    print(f"Serving {SITE_DIR} on port {port}", flush=True)
-    server.serve_forever()
+    print(f"VideoCraft Studio web app on port {port}", flush=True)
+    uvicorn.run(
+        "web.app:app",
+        host="0.0.0.0",
+        port=port,
+        workers=1,  # jobs live in memory; a single process keeps them consistent
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+        timeout_keep_alive=30,
+    )
 
 
 if __name__ == "__main__":

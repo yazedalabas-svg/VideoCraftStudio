@@ -1,0 +1,303 @@
+// VideoCraft Studio — web client.
+// Flow: pick file → choose settings → upload (XHR for progress) → poll job → show before/after + download.
+(() => {
+  "use strict";
+
+  // ---------- Helpers ----------
+  const $ = (id) => document.getElementById(id);
+  const IMAGE_EXT = [".png", ".jpg", ".jpeg", ".jfif", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic", ".heif"];
+  const RES_LABELS = { source: "كما هي", "1080p": "1080p (Full HD)", "2k": "2K", "4k": "4K" };
+  const PRESETS = {
+    balanced: { denoise: 40, sharpness: 40, brightness: 0, contrast: 10, saturation: 10, color_style: "natural" },
+    clean:    { denoise: 85, sharpness: 55, brightness: 0, contrast: 8,  saturation: 6,  color_style: "natural" },
+    vivid:    { denoise: 35, sharpness: 50, brightness: 4, contrast: 18, saturation: 30, color_style: "bright" },
+    light:    { denoise: 15, sharpness: 20, brightness: 0, contrast: 4,  saturation: 4,  color_style: "none" },
+  };
+  const SLIDERS = ["denoise", "sharpness", "brightness", "contrast", "saturation", "quality"];
+  const STORE_KEY = "videocraft-job";
+
+  const ext = (name) => (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+  const formatSize = (bytes) => {
+    const units = ["B", "KB", "MB", "GB"];
+    let i = 0;
+    while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+    return `${bytes.toFixed(i < 2 ? 0 : 1)} ${units[i]}`;
+  };
+  const store = {
+    get() { try { return JSON.parse(sessionStorage.getItem(STORE_KEY)); } catch { return null; } },
+    set(v) { try { sessionStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch { /* private mode */ } },
+    clear() { try { sessionStorage.removeItem(STORE_KEY); } catch { /* ignore */ } },
+  };
+
+  // ---------- State ----------
+  let config = { max_upload_mb: 200, max_video_seconds: 180, video_resolutions: ["source", "1080p"], image_resolutions: ["source", "1080p", "2k", "4k"] };
+  let file = null;
+  let kind = "video";
+  let sourceUrl = null;
+  let jobId = null;
+  let pollTimer = null;
+  let upload = null;
+
+  // ---------- Views ----------
+  const views = ["pick", "setup", "work", "done", "failed"];
+  function show(view) {
+    views.forEach((v) => { $(v).hidden = v !== view; });
+    const heading = $(view).querySelector("h1, h2");
+    if (heading && view !== "pick") { heading.tabIndex = -1; heading.focus({ preventScroll: false }); }
+  }
+
+  // ---------- Config ----------
+  fetch("/api/config")
+    .then((r) => (r.ok ? r.json() : Promise.reject()))
+    .then((c) => {
+      config = c;
+      $("limits").textContent = `فيديو حتى ${Math.round(c.max_video_seconds / 60)} دقائق أو صورة • حتى ${c.max_upload_mb} ميغابايت`;
+      if (!c.ffmpeg) showPickError("خدمة المعالجة غير متاحة الآن. حاول لاحقًا.");
+    })
+    .catch(() => { $("limits").textContent = "فيديو أو صورة"; });
+
+  // ---------- 1. Pick ----------
+  const drop = $("drop");
+  $("file").addEventListener("change", (e) => e.target.files[0] && choose(e.target.files[0]));
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("is-over"); }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("is-over")));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) choose(f); });
+
+  function showPickError(msg) { const el = $("pick-error"); el.textContent = msg; el.hidden = !msg; }
+
+  function choose(f) {
+    showPickError("");
+    const isImage = f.type.startsWith("image/") || IMAGE_EXT.includes(ext(f.name));
+    const isVideo = f.type.startsWith("video/") || (config.accept || []).includes(ext(f.name));
+    if (!isImage && !isVideo) return showPickError("نوع الملف غير مدعوم. اختر فيديو أو صورة.");
+    if (f.size > config.max_upload_mb * 1024 * 1024) return showPickError(`الملف أكبر من ${config.max_upload_mb} ميغابايت.`);
+
+    file = f;
+    kind = isImage ? "image" : "video";
+    if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+    sourceUrl = URL.createObjectURL(f);
+
+    // Thumbnail
+    const thumb = $("thumb");
+    thumb.replaceChildren();
+    const media = document.createElement(kind === "image" ? "img" : "video");
+    media.src = sourceUrl;
+    if (kind === "image") media.alt = ""; else { media.muted = true; media.preload = "metadata"; }
+    media.onerror = () => media.remove();
+    thumb.append(media);
+
+    // Duration check for video (when the browser can read it)
+    if (kind === "video") {
+      const probe = document.createElement("video");
+      probe.preload = "metadata";
+      probe.onloadedmetadata = () => {
+        if (probe.duration > config.max_video_seconds) {
+          show("pick");
+          showPickError(`الفيديو أطول من ${Math.round(config.max_video_seconds / 60)} دقائق. قصّه أولًا أو استخدم نسخة ويندوز.`);
+        }
+      };
+      probe.src = sourceUrl;
+    }
+
+    $("setup-title").textContent = f.name;
+    $("file-size").textContent = `${kind === "image" ? "صورة" : "فيديو"} • ${formatSize(f.size)}`;
+
+    document.querySelectorAll("[data-only]").forEach((el) => { el.hidden = el.dataset.only !== kind; });
+    const res = $("resolution");
+    const allowed = kind === "image" ? config.image_resolutions : config.video_resolutions;
+    res.replaceChildren(...allowed.map((v) => new Option(RES_LABELS[v] || v, v)));
+    res.value = allowed.includes("1080p") && kind === "video" ? "source" : allowed[0];
+
+    show("setup");
+  }
+
+  $("change-file").addEventListener("click", resetToPick);
+
+  // ---------- 2. Settings ----------
+  const form = $("settings");
+
+  function syncOutput(input) {
+    const out = form.querySelector(`output[for="${input.id}"]`);
+    if (out) out.textContent = input.value;
+  }
+  function applyPreset(name) {
+    const p = PRESETS[name];
+    Object.entries(p).forEach(([k, v]) => { const el = form.elements[k]; if (el) el.value = v; });
+    SLIDERS.forEach((k) => syncOutput(form.elements[k]));
+  }
+  form.elements.quality.value = 20;
+  applyPreset("balanced");
+
+  form.addEventListener("input", (e) => {
+    if (e.target.type === "range") {
+      syncOutput(e.target);
+      if (e.target.name !== "quality") form.querySelectorAll('input[name="preset"]').forEach((r) => { r.checked = false; });
+    }
+    if (e.target.name === "preset") applyPreset(e.target.value);
+  });
+
+  function collectOptions() {
+    const o = {};
+    ["resolution", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
+    ["interpolate", "stabilize", "deinterlace", "audio_normalize", "audio_clean"].forEach((k) => { o[k] = form.elements[k].checked; });
+    return o;
+  }
+
+  form.addEventListener("submit", (e) => { e.preventDefault(); start(); });
+
+  // ---------- 3. Upload + poll ----------
+  function setProgress(fraction, text, indeterminate = false) {
+    const bar = $("bar");
+    bar.classList.toggle("is-indeterminate", indeterminate);
+    const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
+    $("bar-fill").style.width = indeterminate ? "" : `${pct}%`;
+    bar.setAttribute("aria-valuenow", String(pct));
+    if (indeterminate) bar.removeAttribute("aria-valuenow");
+    if (text) $("work-status").textContent = text;
+  }
+
+  function start() {
+    if (!file) return;
+    $("start").disabled = true;
+    show("work");
+    setProgress(0, "جاري الرفع… 0%");
+
+    const params = new URLSearchParams({ filename: file.name, options: JSON.stringify(collectOptions()) });
+    upload = new XMLHttpRequest();
+    upload.open("POST", `/api/jobs?${params}`);
+    upload.setRequestHeader("Content-Type", "application/octet-stream");
+    upload.upload.onprogress = (e) => {
+      if (e.lengthComputable) setProgress(e.loaded / e.total * 0.3, `جاري الرفع… ${Math.round(e.loaded / e.total * 100)}%`);
+    };
+    upload.onload = () => {
+      $("start").disabled = false;
+      let data = {};
+      try { data = JSON.parse(upload.responseText); } catch { /* non-JSON error page */ }
+      upload = null;
+      if (data.id) {
+        jobId = data.id;
+        store.set({ id: jobId, kind, name: file.name });
+        poll();
+      } else {
+        fail(data.error || "تعذّر رفع الملف. تحقق من الاتصال وحاول مرة ثانية.");
+      }
+    };
+    upload.onerror = () => { upload = null; $("start").disabled = false; fail("انقطع الاتصال أثناء الرفع. حاول مرة ثانية."); };
+    upload.onabort = () => { upload = null; $("start").disabled = false; show("setup"); };
+    upload.send(file);
+  }
+
+  async function poll() {
+    clearTimeout(pollTimer);
+    if (!jobId) return;
+    let job;
+    let response;
+    try {
+      response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+      job = await response.json();
+    } catch {
+      // Network blip or the free instance waking up: keep waiting instead of failing.
+      pollTimer = setTimeout(poll, 4000);
+      return;
+    }
+    if (!response.ok) {
+      store.clear();
+      return fail(job.error || "انتهت صلاحية المهمة. ارفع الملف مرة ثانية.");
+    }
+
+    if (job.status === "queued") {
+      setProgress(0.3, job.queue_position > 1 ? `في الطابور… ترتيبك ${job.queue_position}` : "في الطابور… يبدأ قريبًا", true);
+    } else if (job.status === "running") {
+      const indeterminate = job.kind === "image" || job.progress <= 0;
+      setProgress(0.3 + job.progress * 0.7, `${job.message} ${indeterminate ? "" : Math.round(job.progress * 100) + "%"}`, indeterminate);
+    } else if (job.status === "done") {
+      return finish(job);
+    } else if (job.status === "cancelled") {
+      store.clear();
+      return show(file ? "setup" : "pick");
+    } else {
+      store.clear();
+      return fail(job.message);
+    }
+    pollTimer = setTimeout(poll, 1500);
+  }
+
+  $("cancel").addEventListener("click", async () => {
+    if (upload) return upload.abort();
+    clearTimeout(pollTimer);
+    if (jobId) {
+      try { await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }); } catch { /* best effort */ }
+    }
+    jobId = null;
+    store.clear();
+    show(file ? "setup" : "pick");
+  });
+
+  // ---------- 4. Result ----------
+  function finish(job) {
+    const url = `/api/jobs/${encodeURIComponent(job.id)}/result`;
+    const dl = $("download");
+    dl.href = `${url}?download=1`;
+    dl.setAttribute("download", job.download_name);
+
+    const isImage = job.kind === "image";
+    $("compare-image").hidden = !isImage;
+    $("compare-video").hidden = isImage;
+    if (isImage) {
+      // After a page reload the original file is gone, so show the result alone.
+      $("after-img").src = url;
+      const canCompare = Boolean(sourceUrl);
+      if (canCompare) $("before-img").src = sourceUrl;
+      $("compare-image").querySelectorAll(".compare-before, .tag, input").forEach((el) => { el.hidden = !canCompare; });
+      $("compare-image").classList.toggle("is-single", !canCompare);
+      setSplit(canCompare ? 50 : 100);
+    } else {
+      $("after-video").src = url;
+      const before = $("before-video");
+      before.closest("figure").hidden = !sourceUrl;
+      if (sourceUrl) { before.src = sourceUrl; before.onerror = () => { before.closest("figure").hidden = true; }; }
+    }
+    const info = job.info || {};
+    $("done-info").textContent = info.width ? `الأصل: ${info.width}×${info.height}${info.duration ? ` • ${Math.round(info.duration)} ث` : ""}` : "";
+    $("tweak").hidden = !file;
+    show("done");
+  }
+
+  function setSplit(pct) {
+    $("compare-image").style.setProperty("--split", `${pct}%`);
+    $("before-wrap").style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+  }
+  $("compare-range").addEventListener("input", (e) => setSplit(Number(e.target.value)));
+
+  $("tweak").addEventListener("click", () => show("setup"));
+  $("retry").addEventListener("click", () => (file ? show("setup") : resetToPick()));
+  $("restart").addEventListener("click", resetToPick);
+  $("restart-2").addEventListener("click", resetToPick);
+
+  // ---------- Errors / reset ----------
+  function fail(message) {
+    clearTimeout(pollTimer);
+    $("failed-msg").textContent = message || "حدث خطأ غير متوقع.";
+    show("failed");
+  }
+
+  function resetToPick() {
+    clearTimeout(pollTimer);
+    jobId = null;
+    file = null;
+    store.clear();
+    $("file").value = "";
+    ["after-video", "before-video"].forEach((id) => { const v = $(id); v.pause(); v.removeAttribute("src"); v.load(); });
+    show("pick");
+  }
+
+  // ---------- Resume after reload ----------
+  const saved = store.get();
+  if (saved && saved.id) {
+    jobId = saved.id;
+    kind = saved.kind;
+    show("work");
+    setProgress(0.3, "جاري استرجاع حالة ملفك…", true);
+    poll();
+  }
+})();
