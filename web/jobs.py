@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,8 +36,11 @@ from . import media
 
 # --- Limits (override with environment variables on Render) -------------------
 
-MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "4096"))
-MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "8192"))
+MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "3600"))
+# Clips longer than this get the faster settings (see FAST_* below): on a fraction of a
+# CPU an hour of video would otherwise take most of a day.
+LONG_VIDEO_SECONDS = int(os.environ.get("LONG_VIDEO_SECONDS", "600"))
 MAX_IMAGE_MEGAPIXELS = int(os.environ.get("MAX_IMAGE_MEGAPIXELS", "40"))
 # Upscaled output is capped so a ×4 of a big photo can't exhaust the 512 MB instance.
 MAX_OUTPUT_MEGAPIXELS = int(os.environ.get("MAX_OUTPUT_MEGAPIXELS", "36"))
@@ -66,7 +70,8 @@ def server_memory_mb() -> int:
 # Encoding 4K video peaked at ~1.1 GB even with every trick here, so 4K *video* output
 # is offered only on instances with room for it (e.g. Render Standard, 2 GB).
 VIDEO_4K_OK = server_memory_mb() >= 1500
-RESULT_TTL = int(os.environ.get("RESULT_TTL_SECONDS", "3600"))
+# Long jobs can finish while nobody is watching, so results wait 6 hours for a visit.
+RESULT_TTL = int(os.environ.get("RESULT_TTL_SECONDS", "21600"))
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".3gp", ".mts", ".ts", ".wmv", ".flv", ".gif"}
 ALLOWED_SUFFIXES = VIDEO_SUFFIXES | IMAGE_SUFFIXES
@@ -145,11 +150,13 @@ def settings_from_options(options: dict, info: MediaInfo) -> ExportSettings:
     fps = {"30": 30, "60": 60}.get(fps_choice, source_fps)
 
     style = options.get("color_style") if options.get("color_style") in COLOR_STYLES else "natural"
+    # "Speed" priority (the default for long clips): skip the two slowest filters.
+    speed = options.get("priority") == "speed" and not info.is_image
     return ExportSettings(
         resolution=resolution,
         fps=max(15, min(60, fps)),
-        interpolate=bool(options.get("interpolate", False)),
-        denoise=_clamp(options.get("denoise"), 0, 100, 40),
+        interpolate=bool(options.get("interpolate", False)) and not speed,
+        denoise=0 if speed else _clamp(options.get("denoise"), 0, 100, 40),
         sharpness=_clamp(options.get("sharpness"), 0, 100, 40),
         brightness=_clamp(options.get("brightness"), -50, 50, 0),
         contrast=_clamp(options.get("contrast"), -50, 50, 10),
@@ -223,12 +230,15 @@ def tonemap_filter(transfer: str, light: bool = False) -> str:
 # keep quality and file size (SSIM 0.996, same size as the defaults) at ~215 MB instead
 # of ~300 MB; one thread is as fast as more on a fraction of a CPU.
 X264_LEAN = "threads=1:rc-lookahead=5:bframes=2"
+X264_PRESET = "veryfast"
+X264_PRESET_FAST = os.environ.get("X264_PRESET_FAST", "superfast")  # long clips
 # Bigger than ~1.5× 1080p: decoding alone takes most of the memory budget.
 HEAVY_SOURCE_PIXELS = 1920 * 1080 * 3 // 2
 
 
 def server_video_pipeline(
-    source, output, info: MediaInfo, settings: ExportSettings, transfer: str | None, audio_source=None
+    source, output, info: MediaInfo, settings: ExportSettings, transfer: str | None, audio_source=None,
+    fast: bool = False,
 ) -> list[list[str]]:
     """FFmpeg processes joined by pipes: decode + filters → encode (HDR: decode → tone map + filters → encode).
 
@@ -272,7 +282,7 @@ def server_video_pipeline(
         *pipe_in,
         "-i", str(audio_source or source),  # audio, metadata and chapters come from the original
         "-map", "0:v:0", "-map", "1:a?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", str(quality), "-x264-params", X264_LEAN,
+        "-c:v", "libx264", "-preset", X264_PRESET_FAST if fast else X264_PRESET, "-crf", str(quality), "-x264-params", X264_LEAN,
         "-pix_fmt", "yuv420p", "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
     ]
     audio_filters = build_audio_filters(settings)
@@ -328,6 +338,7 @@ class JobManager:
         WORK_ROOT.mkdir(parents=True, exist_ok=True)
         threading.Thread(target=self._worker, name="videocraft-worker", daemon=True).start()
         threading.Thread(target=self._janitor, name="videocraft-janitor", daemon=True).start()
+        threading.Thread(target=self._keep_awake, name="videocraft-keepalive", daemon=True).start()
 
     # --- public API used by the HTTP layer ---------------------------------
 
@@ -444,6 +455,7 @@ class JobManager:
             suffix = ".mp4"
             output = job.folder / "result.mp4"
             command = None
+            fast = job.options.get("priority") == "speed"
             if info.display_width * info.display_height > HEAVY_SOURCE_PIXELS:
                 # Heavy source: shrink (and convert HDR) first, then enhance the lighter file.
                 job.message = "تجهيز الفيديو (تصغير الدقة)…"
@@ -455,10 +467,11 @@ class JobManager:
                     self._finish(job, "cancelled", "تم الإلغاء.")
                     return
                 light_info = media.probe(normalized)
-                command = server_video_pipeline(normalized, output, light_info, settings, None, audio_source=job.source)
+                command = server_video_pipeline(normalized, output, light_info, settings, None,
+                                                audio_source=job.source, fast=fast)
                 span = (0.35, 1.0)
             else:
-                command = server_video_pipeline(job.source, output, info, settings, extras["transfer"])
+                command = server_video_pipeline(job.source, output, info, settings, extras["transfer"], fast=fast)
                 span = (0.0, 1.0)
 
         job.message = "جاري التحسين…"
@@ -547,6 +560,23 @@ class JobManager:
             raise VideoEngineError("فشلت المعالجة: " + (" ".join(tail)[-300:] or "خطأ غير معروف"))
 
     # --- cleanup -------------------------------------------------------------
+
+    def _keep_awake(self) -> None:
+        """Render's free instances sleep after ~15 min without *incoming* requests, even
+        mid-job, which would kill a long encode once the visitor closes the page. While
+        work is queued or running, visit our own public URL every 4 minutes."""
+        url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("KEEPALIVE_URL")
+        if not url:
+            return
+        while True:
+            time.sleep(240)
+            with self._lock:
+                busy = any(job.status in ("queued", "running") for job in self._jobs.values())
+            if busy:
+                try:
+                    urllib.request.urlopen(url.rstrip("/") + "/healthz", timeout=20).close()
+                except OSError:
+                    pass  # a missed ping is fine; the next one comes in 4 minutes
 
     def _janitor(self) -> None:
         while True:

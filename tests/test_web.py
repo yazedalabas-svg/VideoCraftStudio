@@ -70,6 +70,12 @@ class SettingsFromOptionsTests(unittest.TestCase):
         for preset in ("1080p", "2k", "4k"):
             self.assertEqual(settings_from_options({"resolution": preset}, _video()).resolution, preset)
 
+    def test_speed_priority_skips_the_slowest_filters(self):
+        s = settings_from_options({"priority": "speed", "denoise": 80, "interpolate": True}, _video())
+        self.assertEqual((s.denoise, s.interpolate), (0, False))
+        q = settings_from_options({"priority": "quality", "denoise": 80, "interpolate": True}, _video())
+        self.assertEqual((q.denoise, q.interpolate), (80, True))
+
     def test_images_may_use_4k(self):
         s = settings_from_options({"resolution": "4k"}, _video(is_image=True, fps=0.0, duration=0.0))
         self.assertEqual(s.resolution, "4k")
@@ -155,6 +161,33 @@ class ServerVideoPipelineTests(unittest.TestCase):
         settings = settings_from_options({}, info)
         decode = jobs.server_video_pipeline("a.mov", "o.mp4", info, settings, "arib-std-b67")[0]
         self.assertIn("tonemap=tonemap=hable", decode[decode.index("-vf") + 1])
+
+    def test_fast_mode_uses_the_faster_preset(self):
+        info = parse_ffmpeg_info(VIDEO_BANNER, Path("clip.mp4"), 1)
+        settings = settings_from_options({}, info)
+        encode = jobs.server_video_pipeline("a.mp4", "o.mp4", info, settings, None, fast=True)[-1]
+        self.assertEqual(encode[encode.index("-preset") + 1], jobs.X264_PRESET_FAST)
+
+    def test_keep_awake_pings_only_while_busy(self):
+        manager = jobs.JobManager.__new__(jobs.JobManager)  # no worker threads
+        manager._lock = __import__("threading").Lock()
+        manager._jobs = {}
+        rounds = iter([False, True])  # first round idle, second round busy
+
+        def fake_sleep(_):
+            try:
+                busy = next(rounds)
+            except StopIteration:
+                raise KeyboardInterrupt  # end the endless loop
+            manager._jobs = {"j": unittest.mock.Mock(status="running")} if busy else {}
+
+        with unittest.mock.patch.dict("os.environ", {"RENDER_EXTERNAL_URL": "https://x.onrender.com"}), \
+                unittest.mock.patch("web.jobs.time.sleep", fake_sleep), \
+                unittest.mock.patch("web.jobs.urllib.request.urlopen") as urlopen:
+            with self.assertRaises(KeyboardInterrupt):
+                manager._keep_awake()
+        urlopen.assert_called_once()
+        self.assertEqual(urlopen.call_args[0][0], "https://x.onrender.com/healthz")
 
     def test_memory_limit_override(self):
         with unittest.mock.patch.dict("os.environ", {"MEMORY_LIMIT_MB": "512"}):

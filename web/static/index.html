@@ -106,6 +106,14 @@
         </div>
 
         <div class="field" data-only="video">
+          <label for="priority">الأولوية</label>
+          <select id="priority" name="priority" aria-describedby="long-note">
+            <option value="quality">الجودة</option>
+            <option value="speed">السرعة (أسرع ~1.5×)</option>
+          </select>
+        </div>
+
+        <div class="field" data-only="video">
           <label for="fps">عدد الإطارات</label>
           <select id="fps" name="fps">
             <option value="source">كما هو</option>
@@ -144,6 +152,8 @@
         <div class="slider"><label for="quality">الجودة ↔ الحجم</label><input type="range" id="quality" name="quality" min="14" max="30" aria-describedby="quality-hint"><output for="quality"></output></div>
         <p id="quality-hint" class="hint">رقم أقل = جودة أعلى وملف أكبر.</p>
       </div>
+
+      <p id="long-note" class="note" hidden></p>
 
       <details class="more" data-only="video">
         <summary>خيارات إضافية للفيديو</summary>

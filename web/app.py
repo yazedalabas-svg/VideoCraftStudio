@@ -63,6 +63,8 @@ async def config(_: Request) -> JSONResponse:
             "image_upscales": list(jobs.IMAGE_UPSCALES),
             "video_seconds_by_resolution": jobs.VIDEO_SECONDS_BY_RESOLUTION,
             "video_4k": jobs.VIDEO_4K_OK,
+            "long_video_seconds": jobs.LONG_VIDEO_SECONDS,
+            "result_ttl_seconds": jobs.RESULT_TTL,
             "max_output_megapixels": jobs.MAX_OUTPUT_MEGAPIXELS,
             "accept": sorted(jobs.ALLOWED_SUFFIXES),
             "ffmpeg": bool(FFMPEG),
