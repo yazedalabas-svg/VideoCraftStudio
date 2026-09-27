@@ -217,3 +217,4 @@ select {
 option:disabled { color: var(--muted); }
 .slider input:disabled { opacity: .4; }
 .slider:has(input:disabled) label::after { content: " (يتكفّل به الذكاء الاصطناعي)"; font-size: 12px; color: var(--muted); }
+.ai-status { margin: 4px 0 0; font-size: 13.5px; font-weight: 600; color: var(--teal); min-height: 1.2em; }
