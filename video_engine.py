@@ -92,6 +92,11 @@ class ExportSettings:
     ai_model: str = "anime_extreme"
     ai_motion: bool = False
     ai_fast_mode: bool = True
+    # A still-only restoration profile. It deliberately leaves colour and
+    # exposure untouched while the neural model repairs compression blocks and
+    # reconstructs missing edge detail.
+    photo_restore: bool = False
+    photo_restore_scale: int = 2
 
 
 def _fraction(value: str | None) -> float:
@@ -324,22 +329,36 @@ def build_video_filters(info: MediaInfo, settings: ExportSettings) -> list[str]:
     box = target_box(info, settings.resolution)
     source_pixels = max(1, info.display_width * info.display_height)
     output_pixels = (box[0] * box[1]) if box else source_pixels
+    source_rate = source_pixels * target_fps
+    output_rate = output_pixels * target_fps
+    # AI jobs already spend the budget on the neural pass, so their final
+    # encode interpolates the cheap way; full motion estimation here used to
+    # make exports crawl long after the GPU work had finished.
     extreme_workload = settings.safe_mode and (
         target_fps > 60
-        or source_pixels * target_fps > 185_000_000
-        or output_pixels * target_fps > 310_000_000
+        or source_rate > 185_000_000
+        or output_rate > 310_000_000
+        or settings.ai_enabled
     )
+    # Full obmc/vsbmc motion search only pays off on small frames; on 1080p+
+    # it multiplies render time for a difference nobody sees at playback.
+    light_workload = source_rate <= 60_000_000 and output_rate <= 120_000_000
 
-    # Motion analysis is done before enlargement. For extreme 4K/high-FPS jobs,
-    # blend interpolation avoids the long stalls of full motion estimation while
+    # Motion analysis is done before enlargement. For heavy jobs, blend
+    # interpolation avoids the long stalls of full motion estimation while
     # keeping the requested constant frame rate.
     if settings.interpolate and info.fps and target_fps > info.fps + 0.5:
         if extreme_workload:
             filters.append(f"minterpolate=fps={target_fps}:mi_mode=blend:scd=fdiff")
-        else:
+        elif light_workload:
             filters.append(
                 f"minterpolate=fps={target_fps}:mi_mode=mci:mc_mode=aobmc:"
                 "me_mode=bidir:vsbmc=1:scd=fdiff"
+            )
+        else:
+            filters.append(
+                f"minterpolate=fps={target_fps}:mi_mode=mci:mc_mode=obmc:"
+                "me_mode=bidir:scd=fdiff"
             )
     elif not info.fps or not math.isclose(target_fps, info.fps, abs_tol=0.25):
         filters.append(f"fps=fps={target_fps}")
@@ -442,11 +461,11 @@ def _video_encoder_args(settings: ExportSettings, preview: bool) -> list[str]:
     cpu_preset = (
         "veryfast"
         if preview or fast_ai_encode
-        else "slow"
+        else "medium"
         if quality <= 14
         else "fast"
         if settings.safe_mode and (settings.fps > 60 or settings.resolution.lower() == "4k")
-        else "slow"
+        else "medium"
     )
     return [
         "-c:v",

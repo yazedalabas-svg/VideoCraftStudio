@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 from video_engine import (
@@ -9,6 +12,15 @@ from video_engine import (
     build_video_filters,
     image_target_box,
     target_box,
+)
+import ai_engine
+from ai_engine import (
+    _image_normalization_command,
+    _intermediate_codec_args,
+    _looks_blank,
+    _target_box_for,
+    _video2x_upscale_command,
+    _waifu2x_scale,
 )
 
 
@@ -136,6 +148,134 @@ class ImageEngineTests(unittest.TestCase):
             LARGE_PHOTO, ExportSettings(resolution="4k"), force_size=(6000, 4000)
         )
         self.assertTrue(any("scale=w=6000:h=4000" in value for value in filters))
+
+    def test_photo_restore_settings_are_serializable(self) -> None:
+        settings = ExportSettings(photo_restore=True, photo_restore_scale=4)
+        self.assertTrue(settings.photo_restore)
+        self.assertEqual(settings.photo_restore_scale, 4)
+
+    def test_photo_restore_runs_real_esrgan_at_the_selected_scale(self) -> None:
+        settings = ExportSettings(
+            resolution="source",
+            photo_restore=True,
+            photo_restore_scale=4,
+            ai_model="photo_restore",
+            ai_fast_mode=True,
+        )
+        self.assertEqual(_target_box_for(SMALL_PHOTO, settings), (4800, 3200))
+        command, width, height = _video2x_upscale_command(
+            Path("video2x.exe"), Path(SMALL_PHOTO.path), Path("out.mkv"), SMALL_PHOTO, settings
+        )
+        self.assertEqual((width, height), (4800, 3200))
+        self.assertEqual(command[command.index("-s") + 1], "4")
+        self.assertEqual(command[command.index("--realesrgan-model") + 1], "realesrgan-plus")
+
+    def test_waifu2x_restoration_uses_native_anime_scale(self) -> None:
+        settings = ExportSettings(
+            resolution="source", photo_restore=True, photo_restore_scale=4
+        )
+        self.assertEqual(_waifu2x_scale(SMALL_PHOTO, settings), 4)
+
+    def test_anime_supreme_always_reconstructs_at_native_three_x(self) -> None:
+        settings = ExportSettings(
+            resolution="source",
+            photo_restore=True,
+            photo_restore_scale=2,
+            ai_model="anime_supreme",
+        )
+        command, width, height = _video2x_upscale_command(
+            Path("video2x.exe"), Path(SMALL_PHOTO.path), Path("out.mkv"), SMALL_PHOTO, settings
+        )
+        self.assertEqual((width, height), (3600, 2400))
+        self.assertEqual(command[command.index("-s") + 1], "3")
+        self.assertEqual(
+            command[command.index("--realcugan-model") + 1],
+            "models-pro",
+        )
+
+    def test_stills_are_normalized_before_video2x(self) -> None:
+        command = _image_normalization_command("ffmpeg", "input.png", "prepared.mkv")
+        self.assertIn("ffv1", command)
+        self.assertEqual(command[command.index("-pix_fmt") + 1], "yuv444p")
+        self.assertEqual(command[-1], "prepared.mkv")
+
+
+
+
+class AiPipelineSpeedTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Keep the suite hermetic: never probe the real GPU encoder here.
+        self._original_probe = ai_engine._video2x_nvenc_usable
+
+    def tearDown(self) -> None:
+        ai_engine._video2x_nvenc_usable = self._original_probe
+
+    def test_fast_mode_uses_nvenc_intermediate_when_available(self) -> None:
+        ai_engine._video2x_nvenc_usable = lambda _video2x: True
+        settings = ExportSettings(ai_enabled=True, ai_fast_mode=True)
+        args = _intermediate_codec_args(settings, Path("video2x.exe"))
+        self.assertEqual(args[args.index("-c") + 1], "h264_nvenc")
+
+    def test_fast_mode_falls_back_to_ultrafast_x264_without_gpu_encoder(
+        self,
+    ) -> None:
+        ai_engine._video2x_nvenc_usable = lambda _video2x: False
+        settings = ExportSettings(ai_enabled=True, ai_fast_mode=True)
+        args = _intermediate_codec_args(settings, Path("video2x.exe"))
+        self.assertEqual(args[args.index("-c") + 1], "libx264")
+        self.assertIn("preset=ultrafast", " ".join(args))
+
+    def test_quality_mode_keeps_careful_x264_intermediate(self) -> None:
+        ai_engine._video2x_nvenc_usable = lambda _video2x: True
+        settings = ExportSettings(ai_enabled=True, ai_fast_mode=False)
+        args = _intermediate_codec_args(settings, Path("video2x.exe"))
+        self.assertEqual(args[args.index("-c") + 1], "libx264")
+        self.assertIn("crf=12", " ".join(args))
+
+    def test_upscale_command_routes_through_the_chosen_intermediate(self) -> None:
+        ai_engine._video2x_nvenc_usable = lambda _video2x: True
+        settings = ExportSettings(resolution="1080p", ai_model="anime_fast", ai_fast_mode=True)
+        command, _width, _height = _video2x_upscale_command(
+            Path("video2x.exe"), "clip.mp4", Path("out.mp4"), LANDSCAPE, settings
+        )
+        joined = " ".join(command)
+        self.assertIn("h264_nvenc", joined)
+
+
+class BlankDetectionTests(unittest.TestCase):
+    @staticmethod
+    def _render(name: str, arguments: list[str]) -> Path:
+        import subprocess
+        import tempfile
+
+        target = Path(tempfile.gettempdir()) / name
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", *arguments, str(target)],
+            check=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        return target
+
+    def test_black_frame_is_rejected(self) -> None:
+        target = self._render(
+            "videocraft_blank_black.png",
+            ["-f", "lavfi", "-i", "color=c=black:s=160x120:d=1", "-frames:v", "1"],
+        )
+        self.assertTrue(_looks_blank(target))
+
+    def test_flat_wash_is_rejected(self) -> None:
+        target = self._render(
+            "videocraft_blank_white.png",
+            ["-f", "lavfi", "-i", "color=c=white:s=160x120:d=1", "-frames:v", "1"],
+        )
+        self.assertTrue(_looks_blank(target))
+
+    def test_real_content_passes(self) -> None:
+        target = self._render(
+            "videocraft_real_smpte.jpg",
+            ["-f", "lavfi", "-i", "smptebars=s=320x240:d=1", "-frames:v", "1", "-q:v", "2"],
+        )
+        self.assertFalse(_looks_blank(target))
 
 
 if __name__ == "__main__":

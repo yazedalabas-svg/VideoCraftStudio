@@ -11,9 +11,14 @@ from pathlib import Path
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QAbstractAnimation,
     QElapsedTimer,
+    QEvent,
+    QObject,
+    QPropertyAnimation,
     QPointF,
     QProcess,
+    QProcessEnvironment,
     QRect,
     QRectF,
     QSettings,
@@ -30,6 +35,8 @@ from PyQt6.QtGui import (
     QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
+    QFont,
+    QFontDatabase,
     QIcon,
     QImage,
     QLinearGradient,
@@ -50,6 +57,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
@@ -84,7 +92,12 @@ from video_engine import (
     probe_media,
     target_box,
 )
-from ai_engine import ai_engine_available, build_ai_pipeline_command
+from ai_engine import (
+    ai_engine_available,
+    build_ai_pipeline_command,
+    vulkan_driver_manifest,
+    waifu2x_available,
+)
 
 
 APP_NAME = "VideoCraft Studio"
@@ -95,41 +108,90 @@ ICON_PATH = ROOT / "assets" / "videocraft.svg"
 
 STYLE = """
 * {
-    font-family: "Segoe UI", "Tahoma";
-    font-size: 13px;
-    color: #EEEAE4;
+    font-family: "Rubik", "Segoe UI", "Tahoma";
+    font-size: 14px;
+    color: #E4DFD7;
 }
 QMainWindow, QDialog, QWidget#Root {
-    background: #101215;
+    background: #121419;
 }
 QScrollArea, QScrollArea > QWidget > QWidget {
     background: transparent;
     border: none;
 }
 QFrame#Header {
-    background: #15171B;
-    border-bottom: 1px solid #272A30;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(28, 31, 37, 235), stop:1 rgba(19, 21, 26, 235));
+    border-bottom: 1px solid #2A2E36;
 }
-QFrame#Card, QFrame#DropZone, QFrame#JobCard {
-    background: #191C21;
-    border: 1px solid #292D34;
+QFrame#Card, QFrame#JobCard {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #1D2027, stop:1 #191B21);
+    border: 1px solid #2A2D35;
+    border-top-color: #353A45;
+    border-bottom-color: #0E0F13;
+    border-radius: 20px;
+}
+QFrame#Card:hover { border-color: #3A3F4B; }
+QFrame#DropZone {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #1A1D24, stop:1 #15171D);
+    border: 2px dashed #6D573E;
     border-radius: 18px;
 }
-QFrame#DropZone {
-    background: #181B20;
-    border: 1px dashed #6D573E;
-}
+QFrame#DropZone:hover { border-color: #9A7448; }
 QFrame#DropZone[dragActive="true"] {
-    background: #211D18;
+    background: #241F17;
     border: 2px solid #D8904B;
 }
+QFrame#BatchPanel {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #1C2028, stop:1 #15171D);
+    border: 1px solid #3A3226;
+    border-radius: 18px;
+}
+QFrame#BatchTile {
+    background: #111317;
+    border: 1px solid #2C303A;
+    border-radius: 12px;
+}
+QFrame#BatchTile:hover { border-color: #5F4A31; }
+QFrame#BatchTile[active="true"] { border: 2px solid #E09A54; background: #1D1913; }
+QFrame#BatchTile[state="done"] { border-color: #315343; }
+QFrame#BatchTile[state="failed"] { border-color: #6A3434; }
+QLabel#TileThumb { background: #0A0C0F; border-radius: 8px; color: #5D636E; }
+QLabel#TileName { color: #E9E3DA; font-size: 11px; }
+QLabel#TileStatus {
+    border-radius: 8px; padding: 1px 7px; font-size: 10px; font-weight: 650;
+    background: #23262E; color: #9AA0AB;
+}
+QLabel#TileStatus[state="running"] { background: #3A2B1A; color: #F4BD80; }
+QLabel#TileStatus[state="done"] { background: #1C2923; color: #7ED0A3; }
+QLabel#TileStatus[state="failed"] { background: #2E1B1B; color: #F09A9A; }
+QLabel#TileIndex {
+    background: rgba(10, 12, 15, 200); color: #EFBE87; border-radius: 8px;
+    padding: 0 6px; font-size: 10px; font-weight: 700;
+}
+QPushButton#TileRemove {
+    background: rgba(10, 12, 15, 210); border: none; border-radius: 9px;
+    color: #C9CDD4; font-weight: 700; padding: 0; min-width: 18px; max-width: 18px;
+    min-height: 18px; max-height: 18px;
+}
+QPushButton#TileRemove:hover { background: #7A2F2F; color: #FFFFFF; }
+QProgressBar#BatchProgress { height: 6px; max-height: 6px; border-radius: 3px; }
+QProgressBar#BatchProgress::chunk { border-radius: 3px; }
+QScrollArea#BatchStrip { background: transparent; border: none; }
+QScrollArea#BatchStrip > QWidget > QWidget { background: transparent; }
+QScrollBar:horizontal { background: transparent; height: 9px; margin: 2px 5px; }
+QScrollBar::handle:horizontal { background: #343943; border-radius: 4px; min-width: 30px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QFrame#Thumb {
-    background: #0C0E10;
+    background: #0A0C0F;
     border: 1px solid #2E3239;
     border-radius: 13px;
 }
 QFrame#ComparePane {
-    background: #090A0C;
+    background: #070809;
     border: 1px solid #2E3239;
     border-radius: 12px;
 }
@@ -138,50 +200,55 @@ QSplitter#CompareSplitter::handle {
     width: 4px;
 }
 QFrame#Divider {
-    background: #2A2E35;
+    background: #272B33;
     min-height: 1px;
     max-height: 1px;
 }
 QLabel#Brand {
+    font-family: "Segoe UI", "Tahoma";
     font-size: 20px;
     font-weight: 700;
-    color: #FAF4EC;
+    color: #F1EBE2;
+    letter-spacing: 0.4px;
 }
 QLabel#PageTitle {
+    font-family: "Segoe UI", "Tahoma";
     font-size: 25px;
     font-weight: 700;
-    color: #FAF4EC;
+    color: #F1EBE2;
 }
 QLabel#CardTitle {
+    font-family: "Segoe UI", "Tahoma";
     font-size: 17px;
     font-weight: 700;
-    color: #F6F0E8;
+    color: #EFE9E0;
 }
 QLabel#SourceName {
+    font-family: "Segoe UI", "Tahoma";
     font-size: 17px;
     font-weight: 650;
-    color: #F7F1E9;
+    color: #F0EAE1;
 }
 QLabel#Muted, QLabel#CardSubtitle, QLabel#Hint, QLabel#Meta, QLabel#Footnote {
-    color: #969BA4;
+    color: #A3A9B3;
 }
-QLabel#CardSubtitle { font-size: 12px; }
-QLabel#Hint { font-size: 11px; }
-QLabel#Meta { font-size: 12px; }
-QLabel#Footnote { font-size: 11px; color: #737983; }
-QLabel#AccentText { color: #E2A15F; font-weight: 650; }
-QLabel#SuccessText { color: #77C49A; font-weight: 650; }
+QLabel#CardSubtitle { font-size: 13px; }
+QLabel#Hint { font-size: 12px; }
+QLabel#Meta { font-size: 13px; }
+QLabel#Footnote { font-size: 12px; color: #7D838D; }
+QLabel#AccentText { color: #DDA872; font-weight: 650; }
+QLabel#SuccessText { color: #7ED0A3; font-weight: 650; }
 QLabel#ValueBadge {
-    background: #29251F;
-    border: 1px solid #5B4732;
-    border-radius: 9px;
-    color: #E8B47C;
+    background: #2A251D;
+    border: 1px solid #5F4A31;
+    border-radius: 10px;
+    color: #EFBE87;
     font-weight: 650;
-    padding: 3px 8px;
+    padding: 3px 9px;
     min-width: 42px;
 }
 QLabel#StatusPill {
-    background: #1C2923;
+    background: rgba(28, 41, 35, 200);
     border: 1px solid #315343;
     border-radius: 12px;
     color: #7ED0A3;
@@ -189,148 +256,233 @@ QLabel#StatusPill {
     font-size: 11px;
 }
 QPushButton {
-    background: #292D34;
-    border: 1px solid #383D46;
-    border-radius: 11px;
-    padding: 8px 14px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #2A2E36, stop:1 #252830);
+    border: 1px solid #373C46;
+    border-radius: 12px;
+    padding: 9px 16px;
     font-weight: 600;
 }
-QPushButton:hover { background: #333840; border-color: #4A505A; }
-QPushButton:pressed { background: #24272D; }
-QPushButton:disabled { color: #60656D; background: #202328; border-color: #292D33; }
+QPushButton:hover {
+    background: #31353E;
+    border-color: #4A505C;
+    color: #F4EFE7;
+}
+QPushButton:pressed { background: #23262D; }
+QPushButton:disabled { color: #5E636B; background: #1F2228; border-color: #282C33; }
 QPushButton#Primary {
-    background: #D8904B;
-    border-color: #E09C58;
-    color: #17120D;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #E9B47A, stop:1 #B87236);
+    border: 1px solid #E2AE78;
+    color: #17100A;
     font-size: 14px;
     font-weight: 750;
-    padding: 11px 21px;
+    padding: 11px 22px;
 }
-QPushButton#Primary:hover { background: #E4A05D; }
+QPushButton#Primary:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #FBC98C, stop:1 #CB7E3A);
+    border-color: #F7C68C;
+}
+QPushButton#Primary:pressed { background: #AE662C; }
 QPushButton#Soft {
-    background: #24211D;
-    border-color: #594630;
-    color: #E7B47D;
+    background: #26221C;
+    border-color: #5C4932;
+    color: #EDBA85;
 }
-QPushButton#Danger { color: #E89292; border-color: #623B3B; }
+QPushButton#Soft:hover { background: #312B22; border-color: #75593B; }
+QPushButton#Danger { color: #EE9A9A; border-color: #663D3D; }
+QPushButton#Danger:hover { background: #332226; }
 QPushButton#Pill {
-    background: #22252B;
-    border: 1px solid #343840;
+    background: #20232A;
+    border: 1px solid #343841;
     border-radius: 12px;
     padding: 10px 12px;
-    color: #B4B8C0;
+    color: #B7BBC4;
 }
-QPushButton#Pill:hover { color: #F1ECE5; border-color: #5C6068; }
+QPushButton#Pill:hover { color: #F4EFE8; border-color: #565C68; background: #262A32; }
 QPushButton#Pill:checked {
-    background: #2A241E;
-    border: 1px solid #C78142;
-    color: #F0B77B;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #332A1E, stop:1 #2A2218);
+    border: 1px solid #D08A44;
+    color: #F5BE83;
+    font-weight: 700;
 }
 QLineEdit, QComboBox {
-    background: #121418;
-    border: 1px solid #32363E;
+    background: #101318;
+    border: 1px solid #32363F;
     border-radius: 10px;
     padding: 8px 11px;
     min-height: 20px;
     selection-background-color: #B97035;
 }
-QLineEdit:focus, QComboBox:focus { border-color: #B9783F; }
+QLineEdit:focus, QComboBox:focus { border-color: #C08147; }
 QComboBox::drop-down { border: none; width: 26px; }
 QComboBox QAbstractItemView {
-    background: #1B1E23;
-    border: 1px solid #343840;
-    selection-background-color: #3A2E23;
+    background: #191C22;
+    border: 1px solid #3A3F4A;
+    border-radius: 8px;
+    selection-background-color: #3D2F22;
     padding: 4px;
+    outline: none;
 }
-QCheckBox { spacing: 9px; color: #D5D2CD; }
+QCheckBox { spacing: 9px; color: #DAD7D1; }
+QCheckBox:hover { color: #FFFFFF; }
 QCheckBox::indicator {
-    width: 18px; height: 18px;
+    width: 19px; height: 19px;
     border-radius: 6px;
-    border: 1px solid #4A4F58;
-    background: #131519;
+    border: 1px solid #4A505B;
+    background: #12151A;
 }
-QCheckBox::indicator:hover { border-color: #B97A42; }
+QCheckBox::indicator:hover { border-color: #C08147; }
 QCheckBox::indicator:checked {
-    background: #D8904B;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #E2A057, stop:1 #C67F3F);
     border-color: #D8904B;
     image: none;
 }
 QSlider::groove:horizontal {
-    background: #30343B;
-    height: 4px;
+    background: #2C3038;
+    height: 5px;
     border-radius: 2px;
 }
-QSlider::sub-page:horizontal { background: #C88243; border-radius: 2px; }
+QSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #C07C3E, stop:1 #E0A05C);
+    border-radius: 2px;
+}
 QSlider::handle:horizontal {
-    background: #F0B678;
-    border: 3px solid #493521;
+    background: #F4BD80;
+    border: 3px solid #4A3620;
     width: 15px;
     height: 15px;
     margin: -7px 0;
     border-radius: 10px;
 }
+QSlider::handle:horizontal:hover { background: #FFD3A0; }
 QProgressBar {
-    background: #292D33;
+    background: #23262D;
     border: none;
     border-radius: 6px;
-    height: 12px;
+    height: 10px;
+    max-height: 10px;
     text-align: center;
     color: transparent;
 }
-QProgressBar::chunk { background: #D8904B; border-radius: 6px; }
-QScrollBar:vertical { background: transparent; width: 10px; margin: 5px 2px; }
-QScrollBar::handle:vertical { background: #373B43; border-radius: 5px; min-height: 30px; }
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #B9793F, stop:1 #E6B07A);
+    border-radius: 5px;
+}
+QScrollBar:vertical { background: transparent; width: 9px; margin: 6px 2px; }
+QScrollBar::handle:vertical { background: #343943; border-radius: 5px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #454B57; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QToolTip {
-    background: #24272D;
-    color: #EFEAE3;
-    border: 1px solid #4A4E56;
+    background: #22252C;
+    color: #E9E4DC;
+    border: 1px solid #4A4F5A;
+    border-radius: 6px;
     padding: 6px;
 }
 """
 
 LIGHT_OVERRIDES = """
-* { color: #24272D; }
-QMainWindow, QDialog, QWidget#Root { background: #F2F0EB; }
+* { color: #2B2F36; }
+QMainWindow, QDialog, QWidget#Root { background: #EDEAE3; }
 QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }
-QFrame#Header { background: #FBF9F5; border-bottom-color: #DDD8CF; }
-QFrame#Card, QFrame#DropZone, QFrame#JobCard {
-    background: #FFFEFC; border-color: #DED9D0;
+QFrame#Header {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(252, 250, 246, 250), stop:1 rgba(246, 243, 237, 250));
+    border-bottom-color: #DFD9CF;
 }
-QFrame#DropZone { background: #FBF8F2; border-color: #C39A6D; }
+QFrame#Card, QFrame#JobCard {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #FBFAF7, stop:1 #F7F5F0);
+    border-color: #DFD9CE;
+}
+QFrame#Card:hover { border-color: #CFC8BC; }
+QFrame#DropZone { background: #FBF8F1; border-color: #C39A6D; }
+QFrame#DropZone:hover { border-color: #A97B47; }
 QFrame#DropZone[dragActive="true"] { background: #FFF1DE; border-color: #C87536; }
-QFrame#Thumb, QFrame#ComparePane { background: #ECE9E3; border-color: #D5D0C7; }
-QFrame#Divider { background: #E2DED7; }
-QLabel#Brand, QLabel#PageTitle, QLabel#CardTitle, QLabel#SourceName { color: #1C2026; }
-QLabel#Muted, QLabel#CardSubtitle, QLabel#Hint, QLabel#Meta { color: #6E747E; }
-QLabel#Footnote { color: #818791; }
-QLabel#AccentText { color: #B7672E; }
+QFrame#Thumb, QFrame#ComparePane { background: #ECE9E2; border-color: #D5D0C6; }
+QFrame#BatchPanel { background: #FBFAF7; border-color: #E4CBA8; }
+QFrame#BatchTile { background: #F7F4EE; border-color: #E0DAD0; }
+QFrame#BatchTile:hover { border-color: #D2B08A; }
+QFrame#BatchTile[active="true"] { border-color: #C87536; background: #FFF4E6; }
+QFrame#BatchTile[state="done"] { border-color: #B7DDC8; }
+QFrame#BatchTile[state="failed"] { border-color: #E8B4B4; }
+QLabel#TileThumb { background: #ECE9E2; color: #A2A7AF; }
+QLabel#TileName { color: #1D2127; }
+QLabel#TileStatus { background: #ECE9E2; color: #6C727D; }
+QLabel#TileStatus[state="running"] { background: #FFF2E2; color: #A85C28; }
+QLabel#TileStatus[state="done"] { background: #EAF7EF; color: #25784E; }
+QLabel#TileStatus[state="failed"] { background: #FCEAEA; color: #B23B3B; }
+QScrollBar::handle:horizontal { background: #D5D0C6; }
+QFrame#Divider { background: #E3DFD7; }
+QLabel#Brand, QLabel#PageTitle, QLabel#CardTitle, QLabel#SourceName { color: #1D2127; }
+QLabel#Muted, QLabel#CardSubtitle, QLabel#Hint, QLabel#Meta { color: #646A74; }
+QLabel#Footnote { color: #828892; }
+QLabel#AccentText { color: #B26327; }
 QLabel#SuccessText { color: #27845A; }
 QLabel#ValueBadge { background: #FFF2E2; border-color: #E4BE91; color: #A85C28; }
 QLabel#StatusPill { background: #EAF7EF; border-color: #B7DDC8; color: #25784E; }
-QPushButton { background: #F0EDE7; border-color: #D8D3CB; color: #2D3138; }
-QPushButton:hover { background: #E7E3DC; border-color: #C7C1B7; }
-QPushButton:pressed { background: #DEDAD3; }
+QPushButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #FDFCFA, stop:1 #F2EFE9);
+    border-color: #D9D4CB;
+    color: #2D3138;
+}
+QPushButton:hover { background: #ECE8E1; border-color: #C4BEB3; color: #14171B; }
+QPushButton:pressed { background: #E2DED6; }
 QPushButton:disabled { color: #A7ABB1; background: #F3F1ED; border-color: #E4E0D9; }
-QPushButton#Primary { background: #CB773B; border-color: #D98749; color: #FFFFFF; }
-QPushButton#Primary:hover { background: #D88649; }
+QPushButton#Primary {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #D98A4C, stop:1 #C06C30);
+    border-color: #DD9558;
+    color: #FFFFFF;
+}
+QPushButton#Primary:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #E0965A, stop:1 #CA7839);
+    border-color: #E8A468;
+}
+QPushButton#Primary:pressed { background: #B5652C; }
 QPushButton#Soft { background: #FFF3E5; border-color: #DEB98F; color: #A95D29; }
+QPushButton#Soft:hover { background: #FFEAD3; }
 QPushButton#Danger { color: #B84B4B; border-color: #E3BABA; }
-QPushButton#Pill { background: #F5F2ED; border-color: #DDD8D0; color: #626873; }
-QPushButton#Pill:hover { color: #20242A; border-color: #C5BFB5; }
-QPushButton#Pill:checked { background: #FFF0DF; border-color: #C87536; color: #A65926; }
-QLineEdit, QComboBox { background: #FFFFFF; border-color: #D8D3CA; color: #252930; }
+QPushButton#Danger:hover { background: #FBEFEF; }
+QPushButton#Pill { background: #F6F3EE; border-color: #DED9D0; color: #5F6570; }
+QPushButton#Pill:hover { color: #1F2329; border-color: #C2BCB1; background: #EFEBE4; }
+QPushButton#Pill:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #FFF1DE, stop:1 #FFE7CB);
+    border-color: #C87536;
+    color: #A0521F;
+    font-weight: 700;
+}
+QLineEdit, QComboBox { background: #FFFFFF; border-color: #D9D4CB; color: #252930; }
 QLineEdit:focus, QComboBox:focus { border-color: #C87536; }
-QComboBox QAbstractItemView { background: #FFFFFF; border-color: #D8D3CA; selection-background-color: #F7E1CB; }
+QComboBox QAbstractItemView { background: #FFFFFF; border-color: #D9D4CB; selection-background-color: #F7E1CB; }
 QCheckBox { color: #3B4048; }
 QCheckBox::indicator { border-color: #B8B3AA; background: #FFFFFF; }
-QCheckBox::indicator:checked { background: #CB773B; border-color: #CB773B; }
-QSlider::groove:horizontal { background: #DDD9D2; }
+QCheckBox::indicator:hover { border-color: #C87536; }
+QCheckBox::indicator:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #D98A4C, stop:1 #C06C30);
+    border-color: #C87536;
+}
+QSlider::groove:horizontal { background: #DEDAD2; }
 QSlider::sub-page:horizontal { background: #C87536; }
 QSlider::handle:horizontal { background: #D98A4D; border-color: #F6D8B6; }
-QProgressBar { background: #E4E0D9; }
-QProgressBar::chunk { background: #C87536; }
+QSlider::handle:horizontal:hover { background: #E89B5E; }
+QProgressBar { background: #E5E1DA; }
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #C87536, stop:1 #DE9558);
+}
 QScrollBar::handle:vertical { background: #C7C2BA; }
+QScrollBar::handle:vertical:hover { background: #B4AFA6; }
 QToolTip { background: #FFFFFF; color: #252930; border-color: #CFC9C0; }
 """
 
@@ -341,6 +493,183 @@ def style_for_theme(theme: str) -> str:
 
 def app_icon(name: str) -> QIcon:
     return QIcon(str(ROOT / "assets" / "icons" / f"{name}.svg"))
+
+
+# ---------------------------------------------------------------- motion ---
+# Small, calm animations: nothing faster than ~180 ms, nothing bouncy.
+
+FONTS_DIR = ROOT / "assets" / "fonts"
+
+
+def load_fonts() -> None:
+    for font_file in sorted(FONTS_DIR.glob("*.ttf")):
+        QFontDatabase.addApplicationFont(str(font_file))
+
+
+def _keep(widget: QObject, animation: QAbstractAnimation) -> QAbstractAnimation:
+    """Hold a reference on the widget so the animation is not collected mid-flight."""
+    running = getattr(widget, "_vc_animations", None)
+    if running is None:
+        running = set()
+        setattr(widget, "_vc_animations", running)
+    running.add(animation)
+    animation.finished.connect(lambda: running.discard(animation))
+    return animation
+
+
+def fade_in(widget: QWidget, duration: int = 420, delay: int = 0, start: float = 0.0) -> None:
+    """Fade a widget in, restoring any drop shadow it had once the fade ends."""
+    previous = widget.graphicsEffect()
+    shadow = None
+    if isinstance(previous, QGraphicsDropShadowEffect):
+        shadow = (previous.blurRadius(), previous.offset(), previous.color())
+    elif previous is not None:
+        return
+    effect = QGraphicsOpacityEffect(widget)
+    effect.setOpacity(start)
+    widget.setGraphicsEffect(effect)
+    animation = QPropertyAnimation(effect, b"opacity", widget)
+    animation.setDuration(duration)
+    animation.setStartValue(start)
+    animation.setEndValue(1.0)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def restore() -> None:
+        if shadow:
+            restored = QGraphicsDropShadowEffect(widget)
+            restored.setBlurRadius(shadow[0])
+            restored.setOffset(shadow[1])
+            restored.setColor(shadow[2])
+            widget.setGraphicsEffect(restored)
+        else:
+            widget.setGraphicsEffect(None)
+
+    animation.finished.connect(restore)
+    _keep(widget, animation)
+    QTimer.singleShot(delay, lambda: animation.start())
+
+
+def reveal(widget: QWidget, duration: int = 320) -> None:
+    """Grow a hidden widget open from zero height, then fade its contents in."""
+    if widget.isVisible():
+        return
+    widget.setMaximumHeight(0)
+    widget.show()
+    target = max(1, widget.sizeHint().height())
+    animation = QPropertyAnimation(widget, b"maximumHeight", widget)
+    animation.setDuration(duration)
+    animation.setStartValue(0)
+    animation.setEndValue(target)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+    animation.finished.connect(lambda: widget.setMaximumHeight(16777215))
+    _keep(widget, animation)
+    animation.start()
+    fade_in(widget, duration + 120)
+
+
+def collapse(widget: QWidget, duration: int = 240) -> None:
+    if not widget.isVisible():
+        return
+    animation = QPropertyAnimation(widget, b"maximumHeight", widget)
+    animation.setDuration(duration)
+    animation.setStartValue(widget.height())
+    animation.setEndValue(0)
+    animation.setEasingCurve(QEasingCurve.Type.InCubic)
+
+    def done() -> None:
+        widget.hide()
+        widget.setMaximumHeight(16777215)
+
+    animation.finished.connect(done)
+    _keep(widget, animation)
+    animation.start()
+
+
+class SmoothProgressBar(QProgressBar):
+    """Glides between values instead of jumping."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._animation = QVariantAnimation(self)
+        self._animation.setDuration(380)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.valueChanged.connect(lambda v: QProgressBar.setValue(self, int(v)))
+
+    def setValue(self, value: int) -> None:  # type: ignore[override]
+        self._animation.stop()
+        if self.maximum() <= self.minimum() or not self.isVisible() or value < self.value():
+            QProgressBar.setValue(self, value)
+            return
+        self._animation.setStartValue(max(self.value(), self.minimum()))
+        self._animation.setEndValue(value)
+        self._animation.start()
+
+    def setRange(self, minimum: int, maximum: int) -> None:  # type: ignore[override]
+        self._animation.stop()
+        QProgressBar.setRange(self, minimum, maximum)
+
+
+class HoverGlow(QObject):
+    """Soft warm halo that eases in under important buttons on hover."""
+
+    def __init__(self, parent: QObject) -> None:
+        super().__init__(parent)
+
+    def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
+        if isinstance(obj, QPushButton) and event.type() in (QEvent.Type.Enter, QEvent.Type.Leave):
+            if not obj.isEnabled():
+                return False
+            effect = obj.graphicsEffect()
+            if not isinstance(effect, QGraphicsDropShadowEffect):
+                if effect is not None:
+                    return False
+                effect = QGraphicsDropShadowEffect(obj)
+                effect.setOffset(0, 4)
+                effect.setBlurRadius(0)
+                effect.setColor(QColor(224, 154, 84, 0))
+                obj.setGraphicsEffect(effect)
+            entering = event.type() == QEvent.Type.Enter
+            animation = QVariantAnimation(obj)
+            animation.setDuration(220 if entering else 300)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.setStartValue(effect.blurRadius() / 28.0)
+            animation.setEndValue(1.0 if entering else 0.0)
+
+            def step(value, effect=effect) -> None:
+                t = float(value)
+                effect.setBlurRadius(28 * t)
+                effect.setColor(QColor(224, 154, 84, int(95 * t)))
+
+            animation.valueChanged.connect(step)
+            _keep(obj, animation)
+            animation.start()
+        return False
+
+
+def install_hover_glow(root: QWidget) -> None:
+    glow = HoverGlow(root)
+    for button in root.findChildren(QPushButton):
+        if button.objectName() in {"Primary", "Soft"}:
+            button.installEventFilter(glow)
+
+
+def crossfade_snapshot(window: QWidget, duration: int = 360) -> None:
+    """Freeze the current look on top of the window and fade it away."""
+    snapshot = QLabel(window)
+    snapshot.setPixmap(window.grab())
+    snapshot.setGeometry(window.rect())
+    snapshot.show()
+    snapshot.raise_()
+    effect = QGraphicsOpacityEffect(snapshot)
+    snapshot.setGraphicsEffect(effect)
+    animation = QPropertyAnimation(effect, b"opacity", snapshot)
+    animation.setDuration(duration)
+    animation.setStartValue(1.0)
+    animation.setEndValue(0.0)
+    animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+    animation.finished.connect(snapshot.deleteLater)
+    _keep(snapshot, animation)
+    animation.start()
 
 
 def setting_bool(value, default: bool = True) -> bool:
@@ -377,11 +706,6 @@ def icon_heading(text: str, icon_name: str) -> QWidget:
 def card(title: str, subtitle: str = "", icon_name: str | None = None) -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
     frame.setObjectName("Card")
-    shadow = QGraphicsDropShadowEffect(frame)
-    shadow.setBlurRadius(28)
-    shadow.setOffset(0, 8)
-    shadow.setColor(QColor(0, 0, 0, 38))
-    frame.setGraphicsEffect(shadow)
     layout = QVBoxLayout(frame)
     set_margins(layout, 20)
     layout.setSpacing(14)
@@ -411,14 +735,28 @@ class BackgroundWidget(QWidget):
         self.setObjectName("Root")
         self.background = QPixmap(str(ROOT / "assets" / "studio_background.png"))
 
+        self._cache: QPixmap | None = None
+        self._cache_key: tuple | None = None
+
     def set_theme(self, theme: str) -> None:
         self.theme = theme
+        self._cache = None
         self.update()
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
+        key = (self.width(), self.height(), self.theme)
+        if self._cache is None or self._cache_key != key:
+            self._cache = self._compose()
+            self._cache_key = key
         painter = QPainter(self)
+        painter.drawPixmap(event.rect(), self._cache, event.rect())
+        painter.end()
+
+    def _compose(self) -> QPixmap:
+        canvas = QPixmap(max(1, self.width()), max(1, self.height()))
+        painter = QPainter(canvas)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        base = QColor("#F2F0EB" if self.theme == "light" else "#101215")
+        base = QColor("#EDEAE3" if self.theme == "light" else "#121419")
         painter.fillRect(self.rect(), base)
         if not self.background.isNull():
             scaled = self.background.scaled(
@@ -428,18 +766,29 @@ class BackgroundWidget(QWidget):
             )
             x = (scaled.width() - self.width()) // 2
             y = (scaled.height() - self.height()) // 2
-            painter.setOpacity(0.075 if self.theme == "light" else 0.13)
+            painter.setOpacity(0.06 if self.theme == "light" else 0.10)
             painter.drawPixmap(0, 0, scaled, x, y, self.width(), self.height())
             painter.setOpacity(1.0)
+        # A soft warm glow bleeding down from the top gives the studio depth
+        # without competing with the cards.
+        glow = QLinearGradient(0, 0, 0, int(self.height() * 0.55))
+        if self.theme == "light":
+            glow.setColorAt(0.0, QColor(232, 172, 108, 26))
+            glow.setColorAt(1.0, QColor(232, 172, 108, 0))
+        else:
+            glow.setColorAt(0.0, QColor(216, 144, 75, 30))
+            glow.setColorAt(1.0, QColor(216, 144, 75, 0))
+        painter.fillRect(self.rect(), glow)
         wash = QLinearGradient(0, 0, self.width(), self.height())
         if self.theme == "light":
-            wash.setColorAt(0, QColor(255, 255, 255, 214))
-            wash.setColorAt(1, QColor(242, 240, 235, 226))
+            wash.setColorAt(0, QColor(255, 255, 255, 208))
+            wash.setColorAt(1, QColor(242, 240, 235, 224))
         else:
-            wash.setColorAt(0, QColor(16, 18, 21, 205))
-            wash.setColorAt(1, QColor(16, 18, 21, 232))
+            wash.setColorAt(0, QColor(18, 20, 25, 196))
+            wash.setColorAt(1, QColor(18, 20, 25, 228))
         painter.fillRect(self.rect(), wash)
         painter.end()
+        return canvas
 
 
 class ScrollSafeSlider(QSlider):
@@ -459,8 +808,262 @@ class ScrollSafeComboBox(QComboBox):
             event.ignore()
 
 
+def repolish(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+BATCH_STATUS_TEXT = {
+    "waiting": "في الانتظار",
+    "running": "جارٍ…",
+    "done": "تم ✓",
+    "failed": "تعذّر",
+}
+
+
+class BatchTile(QFrame):
+    clicked = pyqtSignal(int)
+    remove_requested = pyqtSignal(int)
+
+    def __init__(self, index: int, path: str) -> None:
+        super().__init__()
+        self.index = index
+        self.path = path
+        self.setObjectName("BatchTile")
+        self.setFixedSize(150, 142)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(path)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 7)
+        layout.setSpacing(5)
+
+        self.thumb = QLabel("…")
+        self.thumb.setObjectName("TileThumb")
+        self.thumb.setFixedSize(136, 78)
+        self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.thumb)
+
+        self.index_badge = QLabel(str(index + 1), self.thumb)
+        self.index_badge.setObjectName("TileIndex")
+        self.index_badge.move(5, 5)
+        self.remove_button = QPushButton("×", self.thumb)
+        self.remove_button.setObjectName("TileRemove")
+        self.remove_button.setToolTip("إزالة من المجموعة")
+        self.remove_button.move(136 - 23, 5)
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self.index))
+
+        name = QLabel()
+        name.setObjectName("TileName")
+        name.setText(name.fontMetrics().elidedText(Path(path).name, Qt.TextElideMode.ElideMiddle, 136))
+        layout.addWidget(name)
+
+        self.status = QLabel()
+        self.status.setObjectName("TileStatus")
+        layout.addWidget(self.status, 0, Qt.AlignmentFlag.AlignLeft)
+        self.set_state("waiting")
+
+    def set_thumbnail(self, pixmap: QPixmap | None) -> None:
+        if pixmap and not pixmap.isNull():
+            self.thumb.setPixmap(
+                pixmap.scaled(
+                    136, 78,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                ).copy(0, 0, 136, 78)
+            )
+        else:
+            self.thumb.setText("▶")
+
+    def set_state(self, state: str, detail: str = "") -> None:
+        if self.property("state") not in (None, state):
+            fade_in(self.status, 300, 0, 0.25)
+        self.setProperty("state", state)
+        self.status.setProperty("state", state)
+        self.status.setText(detail or BATCH_STATUS_TEXT.get(state, state))
+        repolish(self)
+        repolish(self.status)
+        self.status.adjustSize()
+        self.status.updateGeometry()
+
+    def set_active(self, active: bool) -> None:
+        self.setProperty("active", active)
+        repolish(self)
+
+    def set_locked(self, locked: bool) -> None:
+        self.remove_button.setVisible(not locked)
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.index)
+        super().mousePressEvent(event)
+
+
+class BatchPanel(QFrame):
+    tile_clicked = pyqtSignal(int)
+    remove_requested = pyqtSignal(int)
+    clear_requested = pyqtSignal()
+    open_folder_requested = pyqtSignal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("BatchPanel")
+        self.tiles: list[BatchTile] = []
+        self.kind = "ملفات"
+        self._thumb_queue: list[BatchTile] = []
+        self._thumb_timer = QTimer(self)
+        self._thumb_timer.setSingleShot(True)
+        self._thumb_timer.timeout.connect(self._next_thumbnail)
+
+        layout = QVBoxLayout(self)
+        set_margins(layout, 16)
+        layout.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.setSpacing(9)
+        icon = QLabel()
+        icon.setPixmap(app_icon("file").pixmap(20, 20))
+        self.title = QLabel("المجموعة")
+        self.title.setObjectName("CardTitle")
+        self.summary = QLabel()
+        self.summary.setObjectName("CardSubtitle")
+        self.count_badge = QLabel()
+        self.count_badge.setObjectName("ValueBadge")
+        self.count_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(icon)
+        header.addWidget(self.title)
+        header.addWidget(self.count_badge)
+        header.addSpacing(6)
+        header.addWidget(self.summary)
+        header.addStretch()
+        self.open_button = QPushButton("فتح المجلد")
+        self.open_button.setObjectName("Soft")
+        self.open_button.setIcon(app_icon("folder"))
+        self.open_button.clicked.connect(self.open_folder_requested.emit)
+        self.open_button.hide()
+        self.clear_button = QPushButton("مسح المجموعة")
+        self.clear_button.setObjectName("Soft")
+        self.clear_button.setIcon(app_icon("cancel"))
+        self.clear_button.clicked.connect(self.clear_requested.emit)
+        header.addWidget(self.open_button)
+        header.addWidget(self.clear_button)
+        layout.addLayout(header)
+
+        self.progress = SmoothProgressBar()
+        self.progress.setObjectName("BatchProgress")
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+
+        self.strip = QScrollArea()
+        self.strip.setObjectName("BatchStrip")
+        self.strip.setWidgetResizable(True)
+        self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.strip.setFixedHeight(162)
+        holder = QWidget()
+        self.tile_row = QHBoxLayout(holder)
+        self.tile_row.setContentsMargins(0, 0, 0, 0)
+        self.tile_row.setSpacing(10)
+        self.tile_row.addStretch()
+        self.strip.setWidget(holder)
+        layout.addWidget(self.strip)
+        self.hide()
+
+    def set_items(self, paths: list[str], is_image: bool) -> None:
+        for tile in self.tiles:
+            tile.deleteLater()
+        self.tiles = []
+        for index, path in enumerate(paths):
+            tile = BatchTile(index, path)
+            tile.clicked.connect(self.tile_clicked.emit)
+            tile.remove_requested.connect(self.remove_requested.emit)
+            self.tile_row.insertWidget(index, tile)
+            self.tiles.append(tile)
+        self.kind = "صور" if is_image else "فيديوهات"
+        self.title.setText("مجموعة " + self.kind)
+        self.count_badge.setText(str(len(paths)))
+        self.progress.setRange(0, max(1, len(paths)))
+        self.progress.setValue(0)
+        self.open_button.hide()
+        self.summary.setText("نفس الإعدادات تُطبّق على الكل  •  اضغط أي ملف لمعاينته")
+        self.set_locked(False)
+        self._thumb_queue = list(self.tiles)
+        self._thumb_timer.start(30)
+        for order, tile in enumerate(self.tiles[:14]):
+            fade_in(tile, 360, 120 + order * 45)
+        if paths:
+            reveal(self)
+        else:
+            collapse(self)
+
+    def _next_thumbnail(self) -> None:
+        if not self._thumb_queue:
+            return
+        tile = self._thumb_queue.pop(0)
+        try:
+            tile.set_thumbnail(quick_thumbnail(tile.path))
+        except RuntimeError:
+            pass  # tile was deleted while queued
+        if self._thumb_queue:
+            self._thumb_timer.start(10)
+
+    def set_active(self, index: int) -> None:
+        for tile in self.tiles:
+            tile.set_active(tile.index == index)
+        if 0 <= index < len(self.tiles):
+            self.strip.ensureWidgetVisible(self.tiles[index], 20, 0)
+
+    def set_state(self, index: int, state: str, detail: str = "") -> None:
+        if 0 <= index < len(self.tiles):
+            self.tiles[index].set_state(state, detail)
+
+    def set_locked(self, locked: bool) -> None:
+        self.clear_button.setEnabled(not locked)
+        for tile in self.tiles:
+            tile.set_locked(locked)
+
+    def set_progress(self, done: int, failed: int, running: bool) -> None:
+        total = len(self.tiles)
+        self.progress.setValue(done + failed)
+        if running:
+            self.summary.setText(f"يُصدَّر الآن  •  اكتمل {done} من {total}" + (f"  •  تعذّر {failed}" if failed else ""))
+        else:
+            self.summary.setText(f"اكتمل {done} من {total}" + (f"  •  تعذّر {failed}" if failed else "  •  كل الملفات جاهزة"))
+
+
+def quick_thumbnail(path: str) -> QPixmap | None:
+    if Path(path).suffix.lower() in IMAGE_SUFFIXES:
+        pixmap = QPixmap(path)
+        return None if pixmap.isNull() else pixmap.scaled(
+            280, 160, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    cache_dir = Path(tempfile.gettempdir()) / "VideoCraftStudio" / "batch_thumbs"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    thumb = cache_dir / f"{abs(hash(path))}.jpg"
+    if not thumb.exists():
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", "1", "-i", path,
+            "-frames:v", "1", "-vf", "scale=280:160:force_original_aspect_ratio=increase",
+            "-q:v", "4", str(thumb),
+        ]
+        try:
+            subprocess.run(
+                command, capture_output=True, timeout=12, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    return QPixmap(str(thumb)) if thumb.exists() else None
+
+
 class DropZone(QFrame):
     file_chosen = pyqtSignal(str)
+    files_chosen = pyqtSignal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -511,17 +1114,17 @@ class DropZone(QFrame):
     def choose_file(self) -> None:
         images = " ".join(f"*{suffix}" for suffix in sorted(IMAGE_SUFFIXES))
         videos = "*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mts *.m2ts *.flv"
-        path, _ = QFileDialog.getOpenFileName(
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "اختر الفيديو أو الصورة",
+            "اختر فيديو/صورة أو مجموعة ملفات",
             str(Path.home() / "Videos"),
             f"الفيديو والصور ({videos} {images});;"
             f"ملفات الفيديو ({videos});;"
             f"ملفات الصور ({images});;"
             "كل الملفات (*.*)",
         )
-        if path:
-            self.file_chosen.emit(path)
+        if paths:
+            self.files_chosen.emit(paths)
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton and not self.select_button.underMouse():
@@ -545,11 +1148,10 @@ class DropZone(QFrame):
         self.setProperty("dragActive", False)
         self.style().unpolish(self)
         self.style().polish(self)
-        for url in event.mimeData().urls():
-            if url.isLocalFile():
-                self.file_chosen.emit(url.toLocalFile())
-                event.acceptProposedAction()
-                return
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if paths:
+            self.files_chosen.emit(paths)
+            event.acceptProposedAction()
 
     def show_media(self, info: MediaInfo, thumbnail: QPixmap | None) -> None:
         name = Path(info.path).name
@@ -576,6 +1178,7 @@ class DropZone(QFrame):
                 )
             )
             self.thumbnail.setText("")
+            fade_in(self.thumbnail, 380)
 
 
 class SliderRow(QWidget):
@@ -1798,6 +2401,12 @@ class MainWindow(QMainWindow):
         )
         self.media_info: MediaInfo | None = None
         self.source_path: str | None = None
+        self.batch_paths: list[str] = []
+        self.batch_index = 0
+        self.batch_running = False
+        self.batch_done: list[str] = []
+        self.batch_failed: list[str] = []
+        self.batch_skipped = 0
         self.last_output: str | None = None
         self.last_compare_output: str | None = None
         self.last_compare_offset_ms = 0
@@ -1823,6 +2432,7 @@ class MainWindow(QMainWindow):
         self.progress_timer.timeout.connect(self.update_progress_status)
         self.nvenc_ready = self.detect_nvenc()
         self.ai_ready = ai_engine_available()
+        self.waifu2x_ready = waifu2x_available()
         self.active_ai = False
         self.active_is_image = False
         self.current_ai_stage = ""
@@ -1882,7 +2492,7 @@ class MainWindow(QMainWindow):
         brand = QLabel(APP_NAME_AR)
         brand.setObjectName("Brand")
         brand_box.addWidget(brand)
-        brand_note = QLabel("وضوح  •  حركة  •  لمسة")
+        brand_note = QLabel("صناعة محلية بحب — كل شيء يعمل على جهازك")
         brand_note.setObjectName("Footnote")
         brand_box.addWidget(brand_note)
         header_layout.addLayout(brand_box)
@@ -1913,10 +2523,10 @@ class MainWindow(QMainWindow):
         intro = QHBoxLayout()
         intro_text = QVBoxLayout()
         intro_text.setSpacing(5)
-        page_title = QLabel("من اللقطة الخام إلى نسخة تشبه قرارك")
+        page_title = QLabel("حسّن الفيديو والصور بضغطة واحدة")
         page_title.setObjectName("PageTitle")
         page_subtitle = QLabel(
-            "مسار واضح من ثلاث مراحل: مصدر، معالجة، وتصدير موثوق — بدون رفع الملف خارج جهازك."
+            "اسحب ملفك، اختر لمسة جاهزة، واضغط تصدير — نحافظ على خصوصيتك ونتائج تليق بشغلك."
         )
         page_subtitle.setObjectName("Muted")
         page_subtitle.setWordWrap(True)
@@ -1930,13 +2540,62 @@ class MainWindow(QMainWindow):
             step = QLabel(text)
             step.setObjectName("ValueBadge")
             step.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            steps.addWidget(step)
+            steps.addWidget(step, 0, Qt.AlignmentFlag.AlignVCenter)
         intro.addLayout(steps)
         page_layout.addLayout(intro)
 
         self.drop_zone = DropZone()
-        self.drop_zone.file_chosen.connect(self.load_media)
+        self.drop_zone.files_chosen.connect(self.load_files)
         page_layout.addWidget(self.drop_zone)
+
+        self.batch_panel = BatchPanel()
+        self.batch_panel.tile_clicked.connect(self.select_batch_item)
+        self.batch_panel.remove_requested.connect(self.remove_batch_item)
+        self.batch_panel.clear_requested.connect(self.clear_batch)
+        self.batch_panel.open_folder_requested.connect(self.open_output_folder)
+        page_layout.addWidget(self.batch_panel)
+
+        quick_card = QFrame()
+        quick_card.setObjectName("Card")
+        quick_layout = QVBoxLayout(quick_card)
+        set_margins(quick_layout, 20)
+        quick_layout.setSpacing(12)
+        quick_title_row = QHBoxLayout()
+        quick_title_row.setSpacing(9)
+        quick_icon = QLabel()
+        quick_icon.setPixmap(app_icon("route").pixmap(22, 22))
+        quick_title = QLabel("بدايات سريعة")
+        quick_title.setObjectName("CardTitle")
+        quick_hint = QLabel("زر واحد يضبط كل شيء — وبعدها عدّل ما تشاء بحرية.")
+        quick_hint.setObjectName("CardSubtitle")
+        quick_title_row.addWidget(quick_icon)
+        quick_title_row.addWidget(quick_title)
+        quick_title_row.addSpacing(8)
+        quick_title_row.addWidget(quick_hint)
+        quick_title_row.addStretch()
+        quick_layout.addLayout(quick_title_row)
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(8)
+        self.quick_preset_buttons: dict[str, QPushButton] = {}
+        for key, label, icon, tip in (
+            ("fast", "سريع وجاهز", "motion", "1080p • 60fps • AI سريع — نتيجة ممتازة بأقل وقت"),
+            ("best", "أفضل جودة", "sparkle", "أقصى تنقية وتفاصيل مع AI EXTREME — الأبطأ والأجمل"),
+            ("vintage", "فيديو قديم", "shield", "تنظيف التشويش وإصلاح الخطوط وتثبيت الاهتزاز"),
+            ("anime", "أنمي ورسوم", "palette", "Real‑CUGAN Pro مع ألوان حيوية — الأفضل للرسوم والأنمي"),
+            ("social", "سوشيال ميديا", "upload", "1080p عمودي أو أفقي بحجم صغير ووضوح عالٍ للهاتف"),
+            ("photo", "ترميم صورة", "quality", "إصلاح البكسلة واستعادة تفاصيل الصور القديمة"),
+        ):
+            button = QPushButton(label)
+            button.setObjectName("Pill")
+            button.setIcon(app_icon(icon))
+            button.setToolTip(tip)
+            button.setMinimumHeight(46)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.clicked.connect(lambda _checked=False, k=key: self.apply_quick_preset(k))
+            quick_row.addWidget(button)
+            self.quick_preset_buttons[key] = button
+        quick_layout.addLayout(quick_row)
+        page_layout.addWidget(quick_card)
 
         columns = QHBoxLayout()
         columns.setSpacing(18)
@@ -1975,7 +2634,7 @@ class MainWindow(QMainWindow):
             button.setCheckable(True)
             button.setProperty("resolution", key)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            button.setMinimumHeight(55)
+            button.setMinimumHeight(62)
             self.resolution_group.addButton(button)
             self.resolution_buttons[key] = button
             res_row.addWidget(button)
@@ -2009,7 +2668,7 @@ class MainWindow(QMainWindow):
         for value in (24, 30, 60, 90, 120):
             button = QPushButton(str(value))
             button.setObjectName("Pill")
-            button.setMaximumHeight(35)
+            button.setMaximumHeight(38)
             button.clicked.connect(lambda _checked=False, fps=value: self.fps_slider.setValue(fps))
             fps_presets.addWidget(button)
             self.fps_preset_buttons.append(button)
@@ -2180,6 +2839,47 @@ class MainWindow(QMainWindow):
         ai_layout.addLayout(ai_model_row)
         ai_layout.addWidget(divider())
 
+        self.photo_restore_row = QWidget()
+        photo_restore_layout = QHBoxLayout(self.photo_restore_row)
+        photo_restore_layout.setContentsMargins(0, 0, 0, 0)
+        photo_restore_layout.setSpacing(12)
+        photo_restore_text = QVBoxLayout()
+        photo_restore_text.setSpacing(2)
+        self.photo_restore_check = QCheckBox("ترميم الصور: إصلاح البكسلة واستعادة التفاصيل")
+        self.photo_restore_check.setEnabled(self.ai_ready)
+        self.photo_restore_check.setToolTip(
+            "للصور الثابتة فقط: اختر محركًا واقعيًا للصور أو Waifu2x للرسوم "
+            "والأنمي. كلاهما لا يضيف فلترًا لونيًا أو تجميليًا."
+        )
+        photo_restore_hint = QLabel(
+            "Real-CUGAN Pro ×3: أقوى ترميم متوافق للخطوط والعيون والبكسلة بلا فلتر لوني."
+        )
+        photo_restore_hint.setObjectName("Hint")
+        photo_restore_text.addWidget(self.photo_restore_check)
+        photo_restore_text.addWidget(photo_restore_hint)
+        photo_restore_layout.addLayout(photo_restore_text, 1)
+        self.photo_restore_profile_combo = ScrollSafeComboBox()
+        self.photo_restore_profile_combo.addItem("صور واقعية — Real-ESRGAN", "photo_restore")
+        self.photo_restore_profile_combo.addItem(
+            "أقوى للأنمي — Real-CUGAN Pro ×3", "anime_supreme"
+        )
+        self.photo_restore_profile_combo.addItem(
+            "رسوم وأنمي — Waifu2x CUNet", "waifu2x_anime"
+        )
+        self.photo_restore_profile_combo.setMinimumWidth(205)
+        self.photo_restore_profile_combo.setEnabled(self.ai_ready)
+        photo_restore_layout.addWidget(self.photo_restore_profile_combo)
+        self.photo_restore_scale_combo = ScrollSafeComboBox()
+        self.photo_restore_scale_combo.addItem("×2 تفاصيل ودقة", 2)
+        self.photo_restore_scale_combo.addItem("×4 أقصى ترميم", 4)
+        self.photo_restore_scale_combo.setCurrentIndex(1)
+        self.photo_restore_scale_combo.setMinimumWidth(150)
+        self.photo_restore_scale_combo.setEnabled(self.ai_ready)
+        photo_restore_layout.addWidget(self.photo_restore_scale_combo)
+        self.photo_restore_row.hide()
+        ai_layout.addWidget(self.photo_restore_row)
+        ai_layout.addWidget(divider())
+
         self.ai_fast_mode_check = QCheckBox("تسريع التصدير مع الحفاظ على نموذج AI")
         self.ai_fast_mode_check.setChecked(True)
         self.ai_fast_mode_check.setEnabled(self.ai_ready)
@@ -2328,7 +3028,7 @@ class MainWindow(QMainWindow):
         job_top.addStretch()
         job_top.addWidget(self.job_detail)
         job_layout.addLayout(job_top)
-        self.progress_bar = QProgressBar()
+        self.progress_bar = SmoothProgressBar()
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(0)
         job_layout.addWidget(self.progress_bar)
@@ -2406,8 +3106,31 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(scroll, 1)
         root_layout.addWidget(self.job_strip)
 
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if getattr(self, "_entrance_done", False):
+            return
+        self._entrance_done = True
+        self.setWindowOpacity(0.0)
+        window_fade = QPropertyAnimation(self, b"windowOpacity", self)
+        window_fade.setDuration(320)
+        window_fade.setStartValue(0.0)
+        window_fade.setEndValue(1.0)
+        window_fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        _keep(self, window_fade)
+        window_fade.start()
+        panels = [
+            w for w in self.findChildren(QFrame)
+            if w.objectName() in {"Card", "DropZone"} and w.isVisible()
+        ]
+        panels.sort(key=lambda w: (w.mapTo(self, w.rect().topLeft()).y(), w.mapTo(self, w.rect().topLeft()).x()))
+        for order, panel in enumerate(panels[:12]):
+            fade_in(panel, 460, 90 + order * 55)
+
     def apply_theme(self, theme: str, *, persist: bool = True) -> None:
         self.current_theme = "light" if theme == "light" else "dark"
+        if persist and self.isVisible():
+            crossfade_snapshot(self)
         app = QApplication.instance()
         if app:
             app.setStyleSheet(style_for_theme(self.current_theme))
@@ -2478,6 +3201,9 @@ class MainWindow(QMainWindow):
         self.quality_combo.currentIndexChanged.connect(self.update_summary)
         self.ai_enabled_check.toggled.connect(self.update_summary)
         self.ai_model_combo.currentIndexChanged.connect(self.update_summary)
+        self.photo_restore_check.toggled.connect(self.update_photo_restore_mode)
+        self.photo_restore_profile_combo.currentIndexChanged.connect(self.update_summary)
+        self.photo_restore_scale_combo.currentIndexChanged.connect(self.update_summary)
         self.ai_fast_mode_check.toggled.connect(self.update_summary)
         self.ai_motion_check.toggled.connect(self.update_summary)
         for slider in (
@@ -2512,6 +3238,8 @@ class MainWindow(QMainWindow):
         self.ai_enabled_check.setText(
             "تشغيل تحسين AI للصورة" if image else "تشغيل تحسين AI للفيديو"
         )
+        self.photo_restore_row.setVisible(image)
+        self.update_photo_restore_mode()
 
         self.codec_heading.setVisible(not image)
         self.codec_combo.setVisible(not image)
@@ -2526,6 +3254,26 @@ class MainWindow(QMainWindow):
         self.preview_button.setText("معاينة سريعة" if image else "معاينة 6 ثوانٍ")
         self.export_button.setText("تصدير الصورة" if image else "تصدير الفيديو")
         self.play_output_button.setText("عرض النتيجة" if image else "مشاهدة النتيجة")
+
+    def update_photo_restore_mode(self, *_args) -> None:
+        """Keep the photo-only restoration profile predictable and neutral."""
+        image = self.is_image_source()
+        selected_profile = str(self.photo_restore_profile_combo.currentData())
+        selected_profile_ready = (
+            selected_profile != "waifu2x_anime" or self.waifu2x_ready
+        )
+        active = (
+            image
+            and self.photo_restore_check.isChecked()
+            and self.ai_ready
+            and selected_profile_ready
+        )
+        self.photo_restore_profile_combo.setEnabled(self.ai_ready and image)
+        self.photo_restore_scale_combo.setEnabled(self.ai_ready and image)
+        self.ai_model_combo.setEnabled(self.ai_ready and not active)
+        if active:
+            self.ai_enabled_check.setChecked(True)
+        self.update_summary()
 
     def apply_max_enhancement(self, *_args, persist: bool = True) -> None:
         """Apply the strongest profile while keeping color controls deliberate."""
@@ -2553,12 +3301,140 @@ class MainWindow(QMainWindow):
             self.save_preferences()
         self.update_summary()
 
+    def apply_quick_preset(self, key: str, persist: bool = True) -> None:
+        """One-click starting points for people who don't want to tweak dials."""
+
+        def set_resolution(value: str) -> None:
+            button = self.resolution_buttons.get(value)
+            if button:
+                button.setChecked(True)
+
+        def set_quality(value: int) -> None:
+            index = self.quality_combo.findData(value)
+            if index >= 0:
+                self.quality_combo.setCurrentIndex(index)
+
+        def set_color(value: str) -> None:
+            index = self.color_style.findData(value)
+            if index >= 0:
+                self.color_style.setCurrentIndex(index)
+
+        def set_ai_model(value: str) -> None:
+            index = self.ai_model_combo.findData(value)
+            if index >= 0:
+                self.ai_model_combo.setCurrentIndex(index)
+
+        if key == "best":
+            self.apply_max_enhancement(persist=False)
+        elif key == "fast":
+            set_resolution("1080p")
+            self.fps_slider.setValue(60)
+            self.interpolate_check.setChecked(True)
+            self.denoise_slider.setValue(18)
+            self.sharpness_slider.setValue(22)
+            self.brightness_slider.setValue(0)
+            self.contrast_slider.setValue(20)
+            self.saturation_slider.setValue(16)
+            set_color("natural")
+            set_quality(18)
+            self.deinterlace_check.setChecked(False)
+            self.stabilize_check.setChecked(False)
+            if self.ai_ready:
+                self.ai_enabled_check.setChecked(True)
+                self.ai_fast_mode_check.setChecked(True)
+                self.ai_motion_check.setChecked(False)
+                set_ai_model("anime_fast")
+        elif key == "anime":
+            set_resolution("source")
+            self.fps_slider.setValue(60)
+            self.interpolate_check.setChecked(True)
+            self.denoise_slider.setValue(30)
+            self.sharpness_slider.setValue(45)
+            self.brightness_slider.setValue(0)
+            self.contrast_slider.setValue(28)
+            self.saturation_slider.setValue(24)
+            set_color("bright")
+            set_quality(16)
+            self.deinterlace_check.setChecked(False)
+            self.stabilize_check.setChecked(False)
+            if self.ai_ready:
+                self.ai_enabled_check.setChecked(True)
+                self.ai_fast_mode_check.setChecked(True)
+                self.ai_motion_check.setChecked(False)
+                set_ai_model("anime_extreme")
+        elif key == "social":
+            set_resolution("1080p")
+            self.fps_slider.setValue(30)
+            self.interpolate_check.setChecked(True)
+            self.denoise_slider.setValue(22)
+            self.sharpness_slider.setValue(38)
+            self.brightness_slider.setValue(4)
+            self.contrast_slider.setValue(26)
+            self.saturation_slider.setValue(20)
+            set_color("natural")
+            set_quality(21)
+            self.deinterlace_check.setChecked(False)
+            self.stabilize_check.setChecked(False)
+            if self.ai_ready:
+                self.ai_enabled_check.setChecked(True)
+                self.ai_fast_mode_check.setChecked(True)
+                self.ai_motion_check.setChecked(False)
+                set_ai_model("anime_shader")
+        elif key == "vintage":
+            set_resolution("1080p")
+            self.fps_slider.setValue(30)
+            self.interpolate_check.setChecked(True)
+            self.denoise_slider.setValue(65)
+            self.sharpness_slider.setValue(40)
+            self.brightness_slider.setValue(0)
+            self.contrast_slider.setValue(10)
+            self.saturation_slider.setValue(8)
+            set_color("warm")
+            set_quality(18)
+            self.deinterlace_check.setChecked(True)
+            self.stabilize_check.setChecked(True)
+            if self.ai_ready:
+                self.ai_enabled_check.setChecked(True)
+                self.ai_fast_mode_check.setChecked(True)
+                self.ai_motion_check.setChecked(False)
+                set_ai_model("anime_fast")
+        elif key == "photo":
+            set_resolution("source")
+            self.denoise_slider.setValue(0)
+            self.sharpness_slider.setValue(0)
+            self.brightness_slider.setValue(0)
+            self.contrast_slider.setValue(0)
+            self.saturation_slider.setValue(0)
+            set_color("none")
+            set_quality(14)
+            if self.ai_ready:
+                profile = self.photo_restore_profile_combo.findData("anime_supreme")
+                if profile >= 0:
+                    self.photo_restore_profile_combo.setCurrentIndex(profile)
+                scale = self.photo_restore_scale_combo.findData(4)
+                if scale >= 0:
+                    self.photo_restore_scale_combo.setCurrentIndex(scale)
+                self.photo_restore_check.setChecked(True)
+        if persist:
+            self.save_preferences()
+        self.update_summary()
+
     def current_resolution(self) -> str:
         checked = self.resolution_group.checkedButton()
         return str(checked.property("resolution")) if checked else "1080p"
 
     def collect_settings(self) -> ExportSettings:
         image = self.is_image_source()
+        photo_restore_model = str(self.photo_restore_profile_combo.currentData())
+        photo_restore_model_ready = (
+            photo_restore_model != "waifu2x_anime" or self.waifu2x_ready
+        )
+        photo_restore = (
+            image
+            and self.photo_restore_check.isChecked()
+            and self.ai_ready
+            and photo_restore_model_ready
+        )
         return ExportSettings(
             resolution=self.current_resolution(),
             fps=self.fps_slider.value(),
@@ -2578,10 +3454,12 @@ class MainWindow(QMainWindow):
             hardware=self.hardware_check.isChecked() and self.nvenc_ready,
             container="mp4",
             safe_mode=self.strict_export,
-            ai_enabled=self.ai_enabled_check.isChecked() and self.ai_ready,
-            ai_model=str(self.ai_model_combo.currentData()),
+            ai_enabled=(self.ai_enabled_check.isChecked() or photo_restore) and self.ai_ready,
+            ai_model=photo_restore_model if photo_restore else str(self.ai_model_combo.currentData()),
             ai_motion=self.ai_motion_check.isChecked() and self.ai_ready and not image,
             ai_fast_mode=self.ai_fast_mode_check.isChecked() and self.ai_ready,
+            photo_restore=photo_restore,
+            photo_restore_scale=int(self.photo_restore_scale_combo.currentData() or 2),
         )
 
     def update_summary(self, *_args) -> None:
@@ -2633,20 +3511,25 @@ class MainWindow(QMainWindow):
                 "anime_fast": "استعادة AnimeVideo AI",
                 "anime_shader": "تحسين Anime4K GAN",
                 "general": "استعادة Real‑ESRGAN",
+                "photo_restore": "ترميم الصور الواقعي بلا فلتر",
+                "anime_supreme": "ترميم Real-CUGAN Pro ×3 القوي",
+                "waifu2x_anime": "ترميم البكسلات للرسوم بـ Waifu2x",
             }
             steps.append(model_names.get(settings.ai_model, "تحسين AI"))
         if settings.ai_motion:
             steps.append("حركة RIFE 4.26")
         if settings.ai_enabled and settings.ai_fast_mode:
             steps.append("ترميز AI سريع")
-        if settings.denoise:
+        if settings.denoise and not settings.photo_restore:
             steps.append("تنظيف التشويش")
-        if settings.sharpness:
+        if settings.sharpness and not settings.photo_restore:
             steps.append("استعادة الحواف")
-        if settings.color_style != "none" or any(
+        if not settings.photo_restore and (settings.color_style != "none" or any(
             (settings.brightness, settings.contrast, settings.saturation)
-        ):
+        )):
             steps.append("موازنة اللون والضوء")
+        elif settings.photo_restore:
+            steps.append("الألوان والإضاءة الأصلية بلا فلتر")
         if settings.interpolate:
             steps.append("حركة بينية عند الحاجة")
         if settings.stabilize:
@@ -2659,16 +3542,75 @@ class MainWindow(QMainWindow):
             steps.append("مسار موثوق")
         self.recipe_steps.setText("  ←  ".join(steps) if steps else "تحويل محافظ بلا تحسينات إضافية")
 
-    def load_media(self, path: str) -> None:
+    def load_files(self, paths: list) -> None:
         if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
             QMessageBox.information(self, "المعالجة جارية", "ألغِ المهمة الحالية قبل تغيير الملف.")
             return
+        paths = [str(p) for p in paths if Path(p).is_file()]
+        if not paths:
+            return
+        # A batch shares one set of settings, so keep it to one kind of media.
+        first_is_image = Path(paths[0]).suffix.lower() in IMAGE_SUFFIXES
+        same_kind = [p for p in paths if (Path(p).suffix.lower() in IMAGE_SUFFIXES) == first_is_image]
+        skipped = len(paths) - len(same_kind)
+        self.batch_paths = same_kind if len(same_kind) > 1 else []
+        self.batch_panel.kind = "صور" if first_is_image else "فيديوهات"
+        if not self.load_media(same_kind[0]):
+            self.batch_paths = []
+            return
+        self.batch_skipped = skipped
+        self.batch_panel.set_items(self.batch_paths, first_is_image)
+        if self.batch_paths:
+            self.batch_panel.set_active(0)
+            self.refresh_batch_header()
+
+    def refresh_batch_header(self) -> None:
+        if not self.batch_paths:
+            return
+        count = len(self.batch_paths)
+        kind = self.batch_panel.kind
+        self.drop_zone.title.setText(f"{count} {kind} في المجموعة")
+        note = f"  •  تم تجاهل {self.batch_skipped} ملف من نوع مختلف" if self.batch_skipped else ""
+        self.drop_zone.meta.setText(f"المعروض الآن: {Path(self.source_path or '').name}{note}")
+        self.drop_zone.select_button.setText("تغيير المجموعة")
+        self.export_button.setText(f"تصدير الكل ({count})")
+        self.output_name.setEnabled(False)
+        self.output_name.setText("يُحفظ كل ملف باسمه الأصلي + _محسن")
+
+    def select_batch_item(self, index: int) -> None:
+        if self.batch_running or not (0 <= index < len(self.batch_paths)):
+            return
+        if self.load_media(self.batch_paths[index]):
+            self.batch_panel.set_active(index)
+            self.refresh_batch_header()
+
+    def remove_batch_item(self, index: int) -> None:
+        if self.batch_running or not (0 <= index < len(self.batch_paths)):
+            return
+        remaining = self.batch_paths[:index] + self.batch_paths[index + 1:]
+        self.batch_skipped = 0
+        self.load_files(remaining)
+
+    def clear_batch(self) -> None:
+        if self.batch_running:
+            return
+        current = self.source_path
+        self.batch_paths = []
+        self.batch_panel.set_items([], True)
+        if current:
+            self.load_media(current)
+
+    def load_media(self, path: str, *, quiet: bool = False) -> bool:
+        if self.process and self.process.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(self, "المعالجة جارية", "ألغِ المهمة الحالية قبل تغيير الملف.")
+            return False
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             info = probe_media(path)
         except VideoEngineError as exc:
-            QMessageBox.warning(self, "تعذّر فتح الملف", str(exc))
-            return
+            if not quiet:
+                QMessageBox.warning(self, "تعذّر فتح الملف", str(exc))
+            return False
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -2697,7 +3639,12 @@ class MainWindow(QMainWindow):
         clean_stem = re.sub(r"[^\w\- ]+", "", Path(path).stem, flags=re.UNICODE).strip()
         default_stem = "image" if info.is_image else "video"
         self.output_name.setText(f"{clean_stem or default_stem}_محسن")
+        if self.batch_paths:
+            self.refresh_batch_header()
+        else:
+            self.output_name.setEnabled(True)
         self.update_summary()
+        return True
 
     def make_thumbnail(self, info: MediaInfo) -> QPixmap | None:
         if info.is_image:
@@ -2864,6 +3811,19 @@ class MainWindow(QMainWindow):
     def start_export(self) -> None:
         if not self.media_info or not self.source_path:
             return
+        if self.batch_paths and not self.batch_running:
+            self.batch_running = True
+            self.batch_index = 0
+            self.batch_done = []
+            self.batch_failed = []
+            self.save_preferences()
+            for i in range(len(self.batch_paths)):
+                self.batch_panel.set_state(i, "waiting")
+            self.batch_panel.set_locked(True)
+            self.batch_panel.open_button.hide()
+            self.batch_panel.set_progress(0, 0, True)
+            self.run_next_batch_item()
+            return
         output = self.output_path()
         if not output:
             return
@@ -2890,6 +3850,71 @@ class MainWindow(QMainWindow):
         self.safe_retry_used = False
         self.cpu_retry_used = False
         self.start_job("export", output, selected_settings, 0.0)
+
+    def run_next_batch_item(self) -> None:
+        while self.batch_running and self.batch_index < len(self.batch_paths):
+            path = self.batch_paths[self.batch_index]
+            self.batch_index += 1
+            current = self.batch_index - 1
+            if not self.load_media(path, quiet=True):
+                self.batch_failed.append(Path(path).name)
+                self.batch_panel.set_state(current, "failed")
+                self.batch_panel.set_progress(len(self.batch_done), len(self.batch_failed), True)
+                continue
+            self.batch_panel.set_active(current)
+            self.batch_panel.set_state(current, "running")
+            clean_stem = re.sub(r"[^\w\- ]+", "", Path(path).stem, flags=re.UNICODE).strip()
+            self.output_name.setText(f"{clean_stem or 'file'}_محسن")
+            output = self.output_path()
+            self.output_name.setText("يُحفظ كل ملف باسمه الأصلي + _محسن")
+            if not output:
+                self.finish_batch()
+                return
+            counter = 2
+            base = output
+            while output.exists() or output.resolve() == Path(path).resolve():
+                output = base.with_name(f"{base.stem}_{counter}{base.suffix}")
+                counter += 1
+            settings = self.collect_settings()
+            if self.batch_index == 1 and not self.preflight_output(output, settings):
+                self.finish_batch()
+                return
+            self.hardware_retry_used = False
+            self.safe_retry_used = False
+            self.cpu_retry_used = False
+            self.start_job("export", output, settings, 0.0)
+            self.job_title.setText(
+                f"الدفعة {self.batch_index}/{len(self.batch_paths)}  •  {self.job_title.text()}"
+            )
+            return
+        self.finish_batch()
+
+    def finish_batch(self) -> None:
+        if not self.batch_running:
+            return
+        self.batch_running = False
+        total = len(self.batch_paths)
+        self.batch_panel.set_locked(False)
+        self.batch_panel.set_progress(len(self.batch_done), len(self.batch_failed), False)
+        self.batch_panel.open_button.setVisible(bool(self.batch_done))
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(1000)
+        self.cancel_button.hide()
+        self.job_title.setText(f"اكتملت الدفعة: {len(self.batch_done)} من {total}")
+        if self.batch_failed:
+            self.job_note.setText("تعذّر: " + "، ".join(self.batch_failed[:6]))
+            QMessageBox.warning(
+                self,
+                "انتهت الدفعة مع أخطاء",
+                f"نجح {len(self.batch_done)} من {total}.\n\nتعذّرت معالجة:\n"
+                + "\n".join(self.batch_failed),
+            )
+        else:
+            self.job_note.setText("حُفظت كل الملفات في مجلد الحفظ.")
+        if self.batch_done:
+            self.open_output_button.show()
+            self.play_completion_sound()
+        self.export_button.setText(f"تصدير الكل ({total})")
 
     def start_job(
         self, job: str, output: Path, settings: ExportSettings, preview_start: float = 0.0
@@ -2956,7 +3981,7 @@ class MainWindow(QMainWindow):
         self.progress_seen = False
         self.current_speed = ""
         self.progress_bar.setRange(0, 0)
-        self.job_strip.show()
+        reveal(self.job_strip)
         if image:
             base_job_title = (
                 "محرك AI يعيد بناء الصورة" if use_ai else "نعالج الصورة"
@@ -2999,6 +4024,15 @@ class MainWindow(QMainWindow):
         self.progress_timer.start()
 
         self.process = QProcess(self)
+        process_environment = QProcessEnvironment.systemEnvironment()
+        vulkan_manifest = vulkan_driver_manifest()
+        if vulkan_manifest and not process_environment.value("VK_DRIVER_FILES"):
+            # Some NVIDIA installations leave the ICD JSON in DriverStore but
+            # omit the Khronos registry value. Passing it only to the AI child
+            # restores Vulkan without changing machine-wide Windows settings.
+            process_environment.insert("VK_DRIVER_FILES", str(vulkan_manifest))
+            process_environment.insert("VK_ICD_FILENAMES", str(vulkan_manifest))
+        self.process.setProcessEnvironment(process_environment)
         self.process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         self.process.readyReadStandardOutput.connect(self.read_process_output)
         self.process.readyReadStandardError.connect(self.read_process_error)
@@ -3120,6 +4154,14 @@ class MainWindow(QMainWindow):
             self.progress_bar.setRange(0, 1000)
             self.progress_bar.setValue(0)
             self.cancel_button.hide()
+            if self.batch_running:
+                self.batch_running = False
+                self.job_title.setText(f"تم إلغاء الدفعة بعد {len(self.batch_done)} ملف")
+                current = self.batch_index - 1
+                self.batch_panel.set_state(current, "waiting", "أُلغي")
+                self.batch_panel.set_locked(False)
+                self.batch_panel.set_progress(len(self.batch_done), len(self.batch_failed), False)
+                self.batch_panel.open_button.setVisible(bool(self.batch_done))
             return
 
         if exit_code == 0 and output and output.exists() and output.stat().st_size > 0:
@@ -3143,6 +4185,14 @@ class MainWindow(QMainWindow):
                 )
                 if self.auto_compare:
                     QTimer.singleShot(220, self.compare_output)
+            elif self.batch_running:
+                self.last_output = str(output)
+                self.batch_done.append(output.name)
+                self.batch_panel.set_state(
+                    self.batch_index - 1, "done", f"تم ✓  {format_size(output.stat().st_size)}"
+                )
+                self.batch_panel.set_progress(len(self.batch_done), len(self.batch_failed), True)
+                QTimer.singleShot(250, self.run_next_batch_item)
             else:
                 self.last_output = str(output)
                 self.job_title.setText("اكتمل التصدير بنجاح")
@@ -3187,12 +4237,20 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if (
-            self.strict_export
+        ai_attempt_failed = bool(
+            self.active_ai
             and self.active_settings
+            and self.active_settings.ai_enabled
+            and not self.active_is_image
+        )
+        if (
+            ai_attempt_failed
             and not self.safe_retry_used
             and output
         ):
+            # The AI pipeline already retries internally; reaching this point
+            # means every GPU attempt failed. Guarantee the user still gets a
+            # result by finishing with the trusted non-AI path.
             self.safe_retry_used = True
             try:
                 output.unlink(missing_ok=True)
@@ -3200,7 +4258,7 @@ class MainWindow(QMainWindow):
                 pass
             fallback = replace(
                 self.active_settings,
-                interpolate=False,
+                interpolate=self.active_settings.interpolate,
                 stabilize=False,
                 denoise=min(self.active_settings.denoise, 45),
                 sharpness=min(self.active_settings.sharpness, 45),
@@ -3238,6 +4296,12 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if self.batch_running and job == "export":
+            self.batch_failed.append(Path(self.source_path or "").name)
+            self.batch_panel.set_state(self.batch_index - 1, "failed")
+            self.batch_panel.set_progress(len(self.batch_done), len(self.batch_failed), True)
+            QTimer.singleShot(250, self.run_next_batch_item)
+            return
         self.cancel_button.hide()
         self.job_title.setText("تعذّر إكمال المعالجة")
         self.job_detail.setText("خطأ")
@@ -3374,6 +4438,30 @@ class MainWindow(QMainWindow):
         self.ai_motion_check.setChecked(
             setting_bool(self.settings_store.value("ai_motion", False)) and self.ai_ready
         )
+        self.photo_restore_check.setChecked(
+            setting_bool(self.settings_store.value("photo_restore", False), default=False)
+            and self.ai_ready
+        )
+        restore_profile_version = int(
+            self.settings_store.value("photo_restore_profile_version", 0)
+        )
+        stored_restore_profile = (
+            "anime_supreme"
+            if restore_profile_version < 2
+            else str(self.settings_store.value("photo_restore_profile", "anime_supreme"))
+        )
+        photo_restore_profile = self.photo_restore_profile_combo.findData(stored_restore_profile)
+        if photo_restore_profile >= 0:
+            self.photo_restore_profile_combo.setCurrentIndex(photo_restore_profile)
+        if restore_profile_version < 2:
+            self.settings_store.setValue("photo_restore_profile", "anime_supreme")
+            self.settings_store.setValue("photo_restore_profile_version", 2)
+            self.settings_store.setValue("photo_restore_scale", 4)
+        photo_restore_scale = self.photo_restore_scale_combo.findData(
+            int(self.settings_store.value("photo_restore_scale", 4))
+        )
+        if photo_restore_scale >= 0:
+            self.photo_restore_scale_combo.setCurrentIndex(photo_restore_scale)
         if profile_version < 2:
             self.apply_max_enhancement(persist=False)
             self.save_preferences()
@@ -3394,6 +4482,14 @@ class MainWindow(QMainWindow):
         self.settings_store.setValue("ai_model", settings.ai_model)
         self.settings_store.setValue("ai_motion", settings.ai_motion)
         self.settings_store.setValue("ai_fast_mode", settings.ai_fast_mode)
+        self.settings_store.setValue("photo_restore", self.photo_restore_check.isChecked())
+        self.settings_store.setValue(
+            "photo_restore_profile", self.photo_restore_profile_combo.currentData()
+        )
+        self.settings_store.setValue("photo_restore_profile_version", 2)
+        self.settings_store.setValue(
+            "photo_restore_scale", self.photo_restore_scale_combo.currentData() or 2
+        )
         self.settings_store.setValue("ai_detail_profile_version", 1)
         self.settings_store.setValue("ai_speed_profile_version", 1)
         self.settings_store.setValue("enhancement_profile_version", 2)
@@ -3428,6 +4524,10 @@ def main() -> int:
     app.setOrganizationName("VideoCraft")
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
     app.setStyle("Fusion")
+    load_fonts()
+    body_font = QFont("Rubik", 10)
+    body_font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
+    app.setFont(body_font)
     app.setStyleSheet(STYLE)
     app.setWindowIcon(QIcon(str(ICON_PATH)))
     window = MainWindow()

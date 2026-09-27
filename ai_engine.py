@@ -27,6 +27,7 @@ from video_engine import (
 
 ROOT = Path(__file__).resolve().parent
 VIDEO2X = ROOT / "tools" / "video2x" / "video2x.exe"
+WAIFU2X_ROOT = ROOT / "tools" / "waifu2x"
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 PERCENT = re.compile(r"\((\d+(?:\.\d+)?)%\)")
 OUT_TIME = re.compile(r"out_time_(?:us|ms)=(\d+)")
@@ -35,6 +36,28 @@ CURRENT_CHILD: subprocess.Popen[str] | None = None
 
 def ai_engine_available() -> bool:
     return VIDEO2X.exists() and (VIDEO2X.parent / "models").is_dir()
+
+
+def waifu2x_binary() -> Path | None:
+    """Locate the portable Waifu2x release without hard-coding its version."""
+    candidates = sorted(WAIFU2X_ROOT.glob("*/waifu2x-ncnn-vulkan.exe"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def waifu2x_available() -> bool:
+    binary = waifu2x_binary()
+    return bool(binary and (binary.parent / "models-cunet").is_dir())
+
+
+def vulkan_driver_manifest() -> Path | None:
+    """Find NVIDIA's Vulkan ICD when the driver installer missed its registry entry."""
+    if os.name != "nt":
+        return None
+    driver_store = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "DriverStore" / "FileRepository"
+    candidates = list(driver_store.glob("nv_dispi.inf_amd64_*/nv-vk64.json"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def _console_python() -> str:
@@ -56,6 +79,8 @@ def build_ai_pipeline_command(
     preview: bool = False,
     preview_start: float = 0.0,
 ) -> list[str]:
+    if settings.ai_model == "waifu2x_anime" and not waifu2x_available():
+        raise RuntimeError("محرك Waifu2x المخصص للرسوم غير مثبت.")
     if not ai_engine_available():
         raise RuntimeError("محرك الذكاء الاصطناعي المحلي غير مثبت.")
     spec = {
@@ -66,6 +91,7 @@ def build_ai_pipeline_command(
         "preview": bool(preview),
         "preview_start": max(0.0, float(preview_start)),
         "video2x": str(VIDEO2X),
+        "waifu2x": str(waifu2x_binary() or ""),
     }
     payload = base64.urlsafe_b64encode(
         json.dumps(spec, ensure_ascii=False).encode("utf-8")
@@ -125,7 +151,122 @@ def _run_streamed(
     return return_code, "\n".join(captured[-200:])
 
 
-def _valid_video(path: Path) -> bool:
+def detect_display_encoder() -> bool:
+    """Report whether NVIDIA NVENC is usable for the throwaway intermediate.
+
+    The AI child re-encodes its output anyway, so a hardware encoder here
+    only removes x264 CPU time from the middle of every job. Probing with a
+    real one-frame encode catches broken drivers that list the encoder but
+    fail at creation time.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    probe = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=256x256:d=0.1",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "h264_nvenc",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(
+            probe,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _looks_blank(path: Path) -> bool:
+    """Detect a dead result: fully black OR a flat colourless frame.
+
+    Video2X can exit zero and still write a healthy-looking file of black
+    frames when the Vulkan backend loses the image on the way in. Some
+    driver/model combinations keep luminance but drop chroma, which shows up
+    as a grey or washed-out picture with no colour left at all. A tiny
+    signalstats probe on one early frame tells a real restoration from either
+    failure in well under a second.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-i",
+        str(path),
+        "-map",
+        "0:v:0",
+        "-vf",
+        "select='eq(n\\,0)+gte(t\\,0.5)',signalstats,metadata=print:file=-",
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=25,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    text = (result.stdout or "") + (result.stderr or "")
+    # signalstats reports per-frame metrics. Two dead signatures matter:
+    #   1. Black: video-range black sits at Y≈16, so a failed pass yields
+    #      YMAX≈16-20 — not one pixel carries real luminance.
+    #   2. Flattened: YMAX minus YMIN collapses to almost nothing — a white,
+    #      grey, or single-colour wash with no picture left. Every natural
+    #      image keeps more than this much luminance spread.
+    ymax_values = re.findall(r"YMAX=([0-9.]+)", text)
+    ymin_values = re.findall(r"YMIN=([0-9.-]+)", text)
+    if not ymax_values or not ymin_values:
+        # No metrics usually means the probe itself failed; assume the file
+        # is fine rather than discarding a healthy result.
+        return False
+    if max(float(v) for v in ymax_values) <= 20.0:
+        return True
+    return max(
+        float(ymax) - float(ymin)
+        for ymax, ymin in zip(ymax_values, ymin_values)
+    ) <= 6.0
+
+
+# Backwards-compatible alias: existing callers still reference the original
+# black-frame probe name.
+_looks_black = _looks_blank
+
+
+def _valid_video(path: Path, *, require_pixels: bool = False) -> bool:
     if not path.exists() or path.stat().st_size < 1024:
         return False
     ffprobe = shutil.which("ffprobe")
@@ -150,7 +291,11 @@ def _valid_video(path: Path) -> bool:
         check=False,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
-    return result.returncode == 0 and "," in result.stdout
+    if result.returncode != 0 or "," not in result.stdout:
+        return False
+    if require_pixels and _looks_blank(path):
+        return False
+    return True
 
 
 def _progress_mapper(start: float, end: float) -> Callable[[str], None]:
@@ -181,6 +326,26 @@ def _ffmpeg_progress(start: float, end: float, duration: float) -> Callable[[str
 
 def _target_box_for(info: MediaInfo, settings: ExportSettings) -> tuple[int, int] | None:
     if info.is_image:
+        if settings.photo_restore:
+            # The restore option is useful even when the user keeps the source
+            # preset: process and export a genuinely larger still, rather than
+            # restoring it at 2x then shrinking the recovered pixels away.
+            restore_scale = max(2, min(4, int(settings.photo_restore_scale)))
+            preset = image_target_box(info, settings.resolution)
+            if preset:
+                restore_scale = max(
+                    restore_scale,
+                    math.ceil(
+                        max(
+                            preset[0] / max(1, info.display_width),
+                            preset[1] / max(1, info.display_height),
+                        )
+                    ),
+                )
+            return (
+                info.display_width * restore_scale,
+                info.display_height * restore_scale,
+            )
         return image_target_box(info, settings.resolution)
     return target_box(info, settings.resolution)
 
@@ -197,7 +362,131 @@ def _scale_for_target(info: MediaInfo, settings: ExportSettings) -> int:
     scale = max(2, min(4, int(math.ceil(required - 1e-6))))
     # 2x is the efficiency sweet spot on 4 GB GPUs. The remaining resize uses
     # accurate Lanczos and is dramatically cheaper than neural 3x/4x output.
+    if settings.photo_restore:
+        # A photo restoration request must run at the scale the user selected;
+        # otherwise a fast 2x model pass followed by a 4x conventional resize
+        # would make the “×4” option misleading.
+        return scale
     return min(2, scale) if settings.ai_fast_mode else scale
+
+
+_NVENC_VIDEO2X_STATE: bool | None = None
+
+
+def reset_nvenc_validation() -> None:
+    """Forget the cached Video2X/NVENC verdict (used by tests and retries)."""
+    global _NVENC_VIDEO2X_STATE
+    _NVENC_VIDEO2X_STATE = None
+
+
+def _video2x_nvenc_usable(video2x: Path) -> bool:
+    """Validate NVENC through Video2X's own bundled FFmpeg, exactly once.
+
+    System FFmpeg accepting h264_nvenc does NOT mean Video2X's older bundled
+    build can use it: some combinations (GTX 16xx + certain drivers) fail with
+    "multiple reference frames are not supported" only inside Video2X. One
+    tiny throwaway render settles the question for the whole session; the
+    result is cached so long jobs never repeat the cost.
+    """
+    global _NVENC_VIDEO2X_STATE
+    if _NVENC_VIDEO2X_STATE is not None:
+        return _NVENC_VIDEO2X_STATE
+    if not detect_display_encoder():
+        _NVENC_VIDEO2X_STATE = False
+        return False
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        _NVENC_VIDEO2X_STATE = False
+        return False
+    temp_dir = Path(tempfile.mkdtemp(prefix="videocraft_nvenc_"))
+    try:
+        sample = temp_dir / "probe_src.mkv"
+        subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=s=320x240:r=15:d=1",
+                "-c:v",
+                "ffv1",
+                str(sample),
+            ],
+            capture_output=True,
+            timeout=60,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        if not sample.exists():
+            _NVENC_VIDEO2X_STATE = False
+            return False
+        probe_out = temp_dir / "probe_out.mp4"
+        result = subprocess.run(
+            [
+                str(video2x),
+                "-i",
+                str(sample),
+                "-o",
+                str(probe_out),
+                "-d",
+                "0",
+                "-c",
+                "h264_nvenc",
+                "-p",
+                "libplacebo",
+                "-w",
+                "320",
+                "-h",
+                "240",
+                "--no-progress",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        healthy = (
+            result.returncode == 0
+            and probe_out.exists()
+            and probe_out.stat().st_size > 1024
+            and _valid_video(probe_out)
+        )
+        _log(f"NVENC_INTERMEDIATE_PROBE={'OK' if healthy else 'UNAVAILABLE'}")
+        _NVENC_VIDEO2X_STATE = healthy
+        return healthy
+    except (OSError, subprocess.TimeoutExpired):
+        _NVENC_VIDEO2X_STATE = False
+        return False
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _intermediate_codec_args(settings: ExportSettings, video2x: Path) -> list[str]:
+    """Encoder settings for the throwaway Video2X output.
+
+    The intermediate is fully re-encoded by the final pass, so the only thing
+    that matters here is speed. When NVENC survives Video2X's own pipeline it
+    removes x264 CPU time from the middle of every job; otherwise ultrafast
+    x264 stays the safe choice.
+    """
+    if settings.ai_fast_mode and _video2x_nvenc_usable(video2x):
+        return ["-c", "h264_nvenc", "-e", "preset=p4", "-e", "rc=vbr", "-e", "cq=16"]
+    return [
+        "-c",
+        "libx264",
+        "-e",
+        "preset=ultrafast" if settings.ai_fast_mode else "preset=faster",
+        "-e",
+        "crf=14" if settings.ai_fast_mode else "crf=12",
+    ]
 
 
 def _video2x_upscale_command(
@@ -220,22 +509,26 @@ def _video2x_upscale_command(
         str(output),
         "-d",
         "0",
-        "-c",
-        "libx264",
     ]
     if lossless:
         # A single still is cheap to carry losslessly, so nothing the model
         # restored is thrown away before the final encode.
-        common.extend(["--pix-fmt", "yuv444p", "-e", "preset=veryfast", "-e", "crf=0"])
-    else:
         common.extend(
             [
+                "-c",
+                "libx264",
+                "--pix-fmt",
+                "yuv444p",
                 "-e",
-                "preset=ultrafast" if settings.ai_fast_mode else "preset=veryfast",
+                "preset=veryfast",
                 "-e",
-                "crf=10" if settings.ai_fast_mode else "crf=8",
+                "crf=0",
             ]
         )
+    else:
+        # The intermediate only feeds the final encode, so speed wins here;
+        # quality is decided by the final pass, not by this throwaway file.
+        common.extend(_intermediate_codec_args(settings, video2x))
     if model == "anime_shader" or (
         info.display_width * info.display_height > 2_300_000
         and target_width <= info.display_width
@@ -254,10 +547,12 @@ def _video2x_upscale_command(
         return command, target_width, target_height
 
     scale = _scale_for_target(info, settings)
-    if model == "anime_extreme":
+    if model in {"anime_extreme", "anime_supreme"}:
         # Pro weights are available at 2x/3x. The exact requested size is
         # produced by the high-quality final scaler after neural restoration.
-        scale = min(3, scale)
+        # Supreme always reconstructs at native 3x first, even for a 2x export,
+        # to give the network more room to repair eyes and broken ink lines.
+        scale = 3 if model == "anime_supreme" else min(3, scale)
         command = common + [
             "-p",
             "realcugan",
@@ -274,7 +569,14 @@ def _video2x_upscale_command(
         ]
         return command, info.display_width * scale, info.display_height * scale
 
-    model_name = "realesrgan-plus" if model == "general" else "realesr-animevideov3"
+    # Photo Restore intentionally uses the realistic Real-ESRGAN weights, not
+    # the anime model or an artistic shader. It is the most conservative route
+    # for repairing JPEG blocks, pixelation, and softened camera detail.
+    model_name = (
+        "realesrgan-plus"
+        if model in {"general", "photo_restore"}
+        else "realesr-animevideov3"
+    )
     command = common + [
         "-p",
         "realesrgan",
@@ -295,6 +597,17 @@ def _video2x_rife_command(
     uhd: bool,
     fast_encode: bool,
 ) -> list[str]:
+    if fast_encode and _video2x_nvenc_usable(video2x):
+        codec = ["-c", "h264_nvenc", "-e", "preset=p4", "-e", "rc=vbr", "-e", "cq=16"]
+    else:
+        codec = [
+            "-c",
+            "libx264",
+            "-e",
+            "preset=ultrafast" if fast_encode else "preset=faster",
+            "-e",
+            "crf=14" if fast_encode else "crf=12",
+        ]
     command = [
         str(video2x),
         "-i",
@@ -309,12 +622,7 @@ def _video2x_rife_command(
         str(multiplier),
         "--rife-model",
         "rife-v4.26",
-        "-c",
-        "libx264",
-        "-e",
-        "preset=ultrafast" if fast_encode else "preset=veryfast",
-        "-e",
-        "crf=10" if fast_encode else "crf=8",
+        *codec,
     ]
     if uhd:
         command.append("--rife-uhd")
@@ -420,7 +728,7 @@ def _run_final_encode(
     post_settings = replace(
         settings,
         denoise=0,
-        sharpness=85 if settings.ai_model == "anime_extreme" else 0,
+        sharpness=85 if settings.ai_model in {"anime_extreme", "anime_supreme"} else 0,
         interpolate=settings.interpolate and not rife_used,
         ai_motion=False,
     )
@@ -448,6 +756,47 @@ def _run_final_encode(
     return code, log
 
 
+def _libplacebo_image_fallback_command(
+    video2x: Path,
+    source: Path,
+    output: Path,
+    info: MediaInfo,
+    settings: ExportSettings,
+) -> tuple[list[str], int, int]:
+    """Last GPU resort for stills: the Anime4K GAN shader instead of a GAN.
+
+    The shader reads pixels through a completely different Vulkan path than
+    RealCUGAN/RealESRGAN, so it usually survives driver states that break the
+    neural models. It resizes straight to the requested box, so no separate
+    normalization pass is needed.
+    """
+    box = _target_box_for(info, settings)
+    width, height = box or (info.display_width, info.display_height)
+    command = [
+        str(video2x),
+        "-i",
+        str(source),
+        "-o",
+        str(output),
+        "-d",
+        "0",
+        *(_intermediate_codec_args(settings, video2x)),
+        "--pix-fmt",
+        "yuv444p",
+        "-e",
+        "crf=0",
+        "-p",
+        "libplacebo",
+        "-w",
+        str(width),
+        "-h",
+        str(height),
+        "--libplacebo-shader",
+        "anime4k-v4.1-gan",
+    ]
+    return command, width, height
+
+
 def _run_image_pipeline(
     source: Path,
     output: Path,
@@ -456,24 +805,96 @@ def _run_image_pipeline(
     video2x: Path,
     temp_root: Path,
 ) -> int:
+    _emit("ai_stage", "prepare")
+    prepared = temp_root / "image_input_yuv444.mkv"
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        _log("FFMPEG_NOT_FOUND_FOR_IMAGE_PREPARE")
+        return 2
+    prepare_command = _image_normalization_command(ffmpeg, source, prepared)
+    code, log = _run_streamed(prepare_command)
+    if code != 0 or not _valid_video(prepared):
+        _log(f"AI_IMAGE_PREPARE_FAILED code={code}\n{log}")
+        return 2
+
+    _emit("ai_progress", "0.06")
     _emit("ai_stage", "upscale")
+    attempts: list[tuple[str, Path]] = [("yuv444", prepared)]
+    attempt_logs: list[str] = []
     upscaled = temp_root / "ai_upscaled.mkv"
-    command, ai_width, ai_height = _video2x_upscale_command(
-        video2x,
-        source,
-        upscaled,
-        info,
-        settings,
-        lossless=True,
-    )
-    code, log = _run_streamed(
-        command,
-        cwd=video2x.parent,
-        progress=_progress_mapper(0.0, 0.82),
-    )
-    if not _valid_video(upscaled):
-        _log(f"AI_IMAGE_UPSCALE_FAILED code={code}\n{log}")
-        return 3
+
+    code = 0
+    log = ""
+    ai_width = 0
+    ai_height = 0
+
+    def run_neural_attempt(prepared_input: Path) -> bool:
+        nonlocal code, log, ai_width, ai_height
+        command, ai_width, ai_height = _video2x_upscale_command(
+            video2x,
+            prepared_input,
+            upscaled,
+            info,
+            settings,
+            lossless=True,
+        )
+        code, log = _run_streamed(
+            command,
+            cwd=video2x.parent,
+            progress=_progress_mapper(0.06, 0.82),
+        )
+        if not _valid_video(upscaled, require_pixels=True):
+            return False
+        if _looks_blank(upscaled):
+            # The GPU pass can exit zero while handing back a dead frame.
+            _log("AI_IMAGE_UPSCALE_BLANK_FRAMES")
+            return False
+        return True
+
+    if not run_neural_attempt(prepared):
+        attempt_logs.append(f"AI_IMAGE_UPSCALE_ATTEMPT=yuv444_FAILED code={code}\n{log}")
+        # Attempt 2: the plain-RGB handoff, the configuration that reliably
+        # survives broken pixel-format paths on most drivers.
+        _log("AI_IMAGE_UPSCALE_RETRY=RGB_HANDOFF")
+        upscaled.unlink(missing_ok=True)
+        rgb_input = temp_root / "image_input_rgb.mkv"
+        retry_code, retry_log = _run_streamed(_image_rgb_handoff_command(ffmpeg, source, rgb_input))
+        if retry_code == 0 and _valid_video(rgb_input):
+            attempts.append(("rgb_handoff", rgb_input))
+            if run_neural_attempt(rgb_input):
+                attempt_logs.clear()
+        else:
+            attempt_logs.append(f"AI_IMAGE_RGB_PREPARE_FAILED code={retry_code}\n{retry_log}")
+
+    if attempt_logs:
+        # Attempt 3: the Anime4K shader through libplacebo — a different GPU
+        # path that usually survives driver states which break the GANs.
+        _log("AI_IMAGE_UPSCALE_RETRY=LIBPLACEBO_SHADER")
+        _log("\n".join(attempt_logs))
+        upscaled.unlink(missing_ok=True)
+        shader_source = attempts[-1][1]
+        shader_command, shader_width, shader_height = _libplacebo_image_fallback_command(
+            video2x,
+            shader_source,
+            upscaled,
+            info,
+            settings,
+        )
+        shader_code, shader_log = _run_streamed(
+            shader_command,
+            cwd=video2x.parent,
+            progress=_progress_mapper(0.06, 0.82),
+        )
+        if (
+            _valid_video(upscaled, require_pixels=True)
+            and not _looks_blank(upscaled)
+        ):
+            ai_width, ai_height = shader_width, shader_height
+        else:
+            _log(f"AI_IMAGE_UPSCALE_ALL_ATTEMPTS_FAILED code={shader_code}\n{shader_log}")
+            return 3
+    else:
+        _log("AI_IMAGE_UPSCALE_OK")
 
     _emit("ai_stage", "encode")
     _emit("ai_progress", "0.86")
@@ -490,12 +911,23 @@ def _run_image_pipeline(
     post_settings = replace(
         settings,
         denoise=0,
-        sharpness=85 if settings.ai_model == "anime_extreme" else 0,
+        sharpness=85 if settings.ai_model in {"anime_extreme", "anime_supreme"} else 0,
     )
-    final_size = image_target_box(info, settings.resolution) or (
+    final_size = _target_box_for(info, settings) or (
         info.display_width,
         info.display_height,
     )
+    if settings.photo_restore:
+        # This profile is restoration, not a look: avoid all colour filters,
+        # conventional denoising, and extra sharpening after the neural pass.
+        post_settings = replace(
+            post_settings,
+            color_style="none",
+            brightness=0,
+            contrast=0,
+            saturation=0,
+            sharpness=0,
+        )
     command = build_image_ffmpeg_command(
         upscaled,
         output,
@@ -508,6 +940,199 @@ def _run_image_pipeline(
         _log(f"AI_IMAGE_ENCODE_FAILED code={code}\n{log}")
         output.unlink(missing_ok=True)
         return 4
+    # The user-facing deliverable is the still itself: never hand over a dead
+    # result even when every encoder step exited zero.
+    blank_probe = temp_root / "final_probe.mkv"
+    probe_code, probe_log = _run_streamed(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(output),
+            "-frames:v",
+            "1",
+            "-c:v",
+            "ffv1",
+            str(blank_probe),
+        ]
+    )
+    if probe_code != 0 or _looks_blank(blank_probe):
+        _log(f"AI_IMAGE_FINAL_BLANK code={probe_code}\n{probe_log}")
+        blank_probe.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+        return 3
+    blank_probe.unlink(missing_ok=True)
+    _emit("ai_progress", "1.0")
+    _emit("ai_stage", "done")
+    return 0
+
+
+def _image_rgb_handoff_command(
+    ffmpeg: str | Path,
+    source: str | Path,
+    output: str | Path,
+) -> list[str]:
+    """Fallback still preparation: plain RGB handoff, no YUV conversion.
+
+    Some driver/model combinations drop the luma plane on the YUV444 route
+    and hand the neural model a black frame. RGB keeps the pixels intact all
+    the way into the GPU, so the retry uses it even though Video2X then
+    re-derives YUV itself.
+    """
+    return [
+        str(ffmpeg),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-sws_flags",
+        "spline+accurate_rnd+full_chroma_int",
+        "-loop",
+        "1",
+        "-i",
+        str(source),
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=spline+accurate_rnd+full_chroma_int",
+        "-c:v",
+        "ffv1",
+        "-pix_fmt",
+        "bgr0",
+        str(output),
+    ]
+
+
+def _image_normalization_command(
+    ffmpeg: str | Path,
+    source: str | Path,
+    output: str | Path,
+) -> list[str]:
+    """Wrap a still as lossless YUV444 so Video2X preserves RGB channel order.
+
+    YUV planes require even dimensions. A picture with an odd width or height
+    would make this conversion fail or emit a black frame, so every still is
+    padded down to even numbers with a high-quality scaler before encoding.
+    """
+    return [
+        str(ffmpeg),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-sws_flags",
+        "spline+accurate_rnd+full_chroma_int",
+        "-loop",
+        "1",
+        "-i",
+        str(source),
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=spline+accurate_rnd+full_chroma_int",
+        "-c:v",
+        "ffv1",
+        "-pix_fmt",
+        "yuv444p",
+        "-colorspace",
+        "bt709",
+        "-color_primaries",
+        "bt709",
+        "-color_trc",
+        "bt709",
+        str(output),
+    ]
+
+
+def _waifu2x_scale(info: MediaInfo, settings: ExportSettings) -> int:
+    """Return a native Waifu2x scale that meets the requested output size."""
+    target = _target_box_for(info, settings) or (
+        info.display_width,
+        info.display_height,
+    )
+    required = max(
+        target[0] / max(1, info.display_width),
+        target[1] / max(1, info.display_height),
+    )
+    return 2 if required <= 2 else 4
+
+
+def _run_waifu2x_image_pipeline(
+    source: Path,
+    output: Path,
+    info: MediaInfo,
+    settings: ExportSettings,
+    waifu2x: Path,
+    temp_root: Path,
+) -> int:
+    """Strong, line-art-safe restoration for pixelated anime and drawings."""
+    _emit("ai_stage", "upscale")
+    upscaled = temp_root / "waifu2x_upscaled.png"
+    model_dir = waifu2x.parent / "models-cunet"
+    scale = _waifu2x_scale(info, settings)
+    command = [
+        str(waifu2x),
+        "-i",
+        str(source),
+        "-o",
+        str(upscaled),
+        "-n",
+        "3",
+        "-s",
+        str(scale),
+        "-m",
+        str(model_dir),
+        "-x",
+        "-f",
+        "png",
+    ]
+    code, log = _run_streamed(
+        command,
+        cwd=waifu2x.parent,
+        progress=_progress_mapper(0.0, 0.86),
+    )
+    if code != 0 or not upscaled.exists() or upscaled.stat().st_size < 512:
+        _log(f"WAIFU2X_IMAGE_UPSCALE_FAILED code={code}\n{log}")
+        return 3
+
+    _emit("ai_stage", "encode")
+    _emit("ai_progress", "0.90")
+    upscaled_info = replace(
+        info,
+        path=str(upscaled),
+        width=info.display_width * scale,
+        height=info.display_height * scale,
+        size_bytes=upscaled.stat().st_size,
+        rotation=0,
+    )
+    post_settings = replace(
+        settings,
+        denoise=0,
+        sharpness=0,
+        color_style="none",
+        brightness=0,
+        contrast=0,
+        saturation=0,
+    )
+    final_size = _target_box_for(info, settings) or (
+        info.display_width,
+        info.display_height,
+    )
+    command = build_image_ffmpeg_command(
+        upscaled,
+        output,
+        upscaled_info,
+        post_settings,
+        force_size=final_size,
+    )
+    code, log = _run_streamed(command)
+    if code != 0 or not output.exists() or output.stat().st_size < 512:
+        _log(f"WAIFU2X_IMAGE_ENCODE_FAILED code={code}\n{log}")
+        output.unlink(missing_ok=True)
+        return 4
     _emit("ai_progress", "1.0")
     _emit("ai_stage", "done")
     return 0
@@ -517,6 +1142,8 @@ def run_pipeline(spec: dict) -> int:
     source = Path(spec["source"])
     output = Path(spec["output"])
     video2x = Path(spec["video2x"])
+    waifu2x_value = str(spec.get("waifu2x") or "")
+    waifu2x = Path(waifu2x_value) if waifu2x_value else None
     info = MediaInfo(**spec["info"])
     settings = ExportSettings(**spec["settings"])
     preview = bool(spec.get("preview"))
@@ -531,6 +1158,13 @@ def run_pipeline(spec: dict) -> int:
     try:
         output.unlink(missing_ok=True)
         if info.is_image:
+            if settings.ai_model == "waifu2x_anime":
+                if waifu2x is None or not waifu2x.is_file():
+                    _log("WAIFU2X_NOT_FOUND")
+                    return 2
+                return _run_waifu2x_image_pipeline(
+                    source, output, info, settings, waifu2x, temp_root
+                )
             return _run_image_pipeline(source, output, info, settings, video2x, temp_root)
         working_source = source
         if preview:
@@ -561,6 +1195,12 @@ def run_pipeline(spec: dict) -> int:
         # healthy file. File probing is the source of truth for this stage.
         if not _valid_video(ai_output):
             _log(f"AI_UPSCALE_FAILED code={code}\n{log}")
+            return 3
+        if _looks_blank(ai_output):
+            # A zero-exit GPU pass that hands back black frames must not
+            # continue: failing here lets the app's reliable non-AI path
+            # take over instead of exporting a black video.
+            _log("AI_UPSCALE_BLACK_FRAMES")
             return 3
 
         intermediate = ai_output
@@ -602,7 +1242,7 @@ def run_pipeline(spec: dict) -> int:
             duration,
             rife_used=rife_used,
         )
-        if code != 0 or not _valid_video(output):
+        if code != 0 or not _valid_video(output, require_pixels=True):
             _log(f"AI_FINAL_ENCODE_FAILED code={code}\n{log}")
             output.unlink(missing_ok=True)
             return 4
