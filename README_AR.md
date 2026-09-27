@@ -89,3 +89,9 @@
 3. بعد دقيقة يصير الموقع شغّال على رابط مثل `https://videocraft-studio.onrender.com`.
 
 أي تعديل يُدمج في فرع `main` يُنشر تلقائيًا بدون أي خطوة إضافية.
+
+**لو أنشأت الخدمة يدويًا كـ Web Service (Python):** من صفحة الخدمة ← **Settings** غيّر:
+- **Build Command:** `true` (ما نحتاج نثبّت PyQt6 على السيرفر)
+- **Start Command:** `python server.py`
+
+الملف `server.py` يعرض محتوى `docs/` على المنفذ `$PORT` باستخدام مكتبات بايثون القياسية فقط.
