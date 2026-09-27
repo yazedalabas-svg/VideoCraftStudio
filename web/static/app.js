@@ -25,13 +25,19 @@
     return `${bytes.toFixed(i < 2 ? 0 : 1)} ${units[i]}`;
   };
   const store = {
-    get() { try { return JSON.parse(sessionStorage.getItem(STORE_KEY)); } catch { return null; } },
-    set(v) { try { sessionStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch { /* private mode */ } },
-    clear() { try { sessionStorage.removeItem(STORE_KEY); } catch { /* ignore */ } },
+    // localStorage (not sessionStorage): a long job must survive closing the tab.
+    get() { try { return JSON.parse(localStorage.getItem(STORE_KEY)); } catch { return null; } },
+    set(v) { try { localStorage.setItem(STORE_KEY, JSON.stringify(v)); } catch { /* private mode */ } },
+    clear() { try { localStorage.removeItem(STORE_KEY); } catch { /* ignore */ } },
   };
 
   // ---------- State ----------
   let config = { max_upload_mb: 4096, max_video_seconds: 300, video_resolutions: ["source", "1080p", "2k", "4k"], image_resolutions: ["source", "1080p", "2k", "4k"], video_4k: false };
+  // Arabic: 3–10 دقائق, 11+ دقيقة.
+  const minutesLabel = (m) => (m >= 3 && m <= 10 ? `${m} دقائق` : `${m} دقيقة`);
+  const durationLabel = (sec) => (sec >= 3600 ? (sec === 3600 ? "ساعة" : `${+(sec / 3600).toFixed(1)} ساعة`) : minutesLabel(Math.max(1, Math.round(sec / 60))));
+  const etaLabel = (sec) => (sec >= 5400 ? `باقي تقريبًا ${+(sec / 3600).toFixed(1)} ساعة`
+    : sec >= 90 ? `باقي تقريبًا ${minutesLabel(Math.round(sec / 60))}` : "باقي أقل من دقيقتين");
   const sizeLabel = (mb) => (mb >= 1024 ? `${+(mb / 1024).toFixed(1)} غيغابايت` : `${mb} ميغابايت`);
   let file = null;
   let kind = "video";
@@ -76,7 +82,7 @@
     .then((r) => (r.ok ? r.json() : Promise.reject()))
     .then((c) => {
       config = c;
-      $("limits").textContent = `فيديو حتى ${Math.round(c.max_video_seconds / 60)} دقائق أو صورة • حتى ${sizeLabel(c.max_upload_mb)}`;
+      $("limits").textContent = `فيديو حتى ${durationLabel(c.max_video_seconds)} أو صورة • حتى ${sizeLabel(c.max_upload_mb)}`;
       if (!c.ffmpeg) showPickError("خدمة المعالجة غير متاحة الآن. حاول لاحقًا.");
     })
     .catch(() => { $("limits").textContent = "فيديو أو صورة"; });
@@ -120,11 +126,20 @@
       const probe = document.createElement("video");
       probe.preload = "metadata";
       videoDuration = 0;
+      $("long-note").hidden = true; // shown only once the length is known and long
       probe.onloadedmetadata = () => {
         videoDuration = probe.duration || 0;
+        const long = videoDuration > (config.long_video_seconds || 600);
+        form.elements.priority.value = long ? "speed" : "quality";
+        const note = $("long-note");
+        note.hidden = !long;
+        const hours = Math.round((config.result_ttl_seconds || 21600) / 3600);
+        note.textContent = long
+          ? `مقطع طويل (${durationLabel(Math.round(videoDuration))}): على الخادم المجاني المعالجة ممكن تأخذ ساعات. تقدر تسكّر الصفحة وترجع لها من نفس الجهاز، والنتيجة تنتظرك ${hours} ساعات بعد ما تخلص.`
+          : "";
         if (probe.duration > config.max_video_seconds) {
           show("pick");
-          showPickError(`الفيديو أطول من ${Math.round(config.max_video_seconds / 60)} دقائق. قصّه أولًا أو استخدم نسخة ويندوز.`);
+          showPickError(`الفيديو أطول من ${durationLabel(config.max_video_seconds)}. قصّه أولًا أو استخدم نسخة ويندوز.`);
         }
       };
       probe.src = sourceUrl;
@@ -134,6 +149,7 @@
     $("file-size").textContent = `${kind === "image" ? "صورة" : "فيديو"} • ${formatSize(f.size)}`;
 
     document.querySelectorAll("[data-only]").forEach((el) => { el.hidden = el.dataset.only !== kind; });
+    if (kind !== "video") $("long-note").hidden = true;
     const res = $("resolution");
     const allowed = kind === "image" ? config.image_resolutions : config.video_resolutions;
     res.replaceChildren(...allowed.map((v) => {
@@ -293,7 +309,7 @@
 
   function collectOptions() {
     const o = {};
-    ["resolution", "upscale", "ai_model", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
+    ["resolution", "upscale", "ai_model", "priority", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
     ["interpolate", "stabilize", "deinterlace", "audio_normalize", "audio_clean"].forEach((k) => { o[k] = form.elements[k].checked; });
     return o;
   }
@@ -570,6 +586,8 @@
     }
     if (!response.ok) {
       store.clear();
+      // A job saved from an earlier visit has expired: start fresh without an error.
+      if (resuming && response.status === 404) { resuming = false; return show("pick"); }
       // The free instance restarted and lost the job: send the same file again once.
       if (response.status === 404 && lastSend && !resent) {
         resent = true;
@@ -579,10 +597,11 @@
       return fail(job.error || "انتهت صلاحية المهمة. ارفع الملف مرة ثانية.");
     }
 
+    resuming = false;
     if (job.status === "queued") {
       setProgress(0.3, job.queue_position > 1 ? `في الطابور… ترتيبك ${job.queue_position}` : "في الطابور… يبدأ قريبًا", true);
     } else if (job.status === "running" && job.eta) {
-      const eta = job.eta >= 90 ? `باقي تقريبًا ${Math.round(job.eta / 60)} دقيقة` : `باقي أقل من دقيقتين`;
+      const eta = etaLabel(job.eta);
       setProgress(0.3 + job.progress * 0.7, `${job.message} ${Math.round(job.progress * 100)}% • ${eta}`);
     } else if (job.status === "running") {
       const indeterminate = job.kind === "image" || job.progress <= 0;
@@ -670,8 +689,10 @@
   }
 
   // ---------- Resume after reload ----------
+  let resuming = false;
   const saved = store.get();
   if (saved && saved.id) {
+    resuming = true;
     jobId = saved.id;
     kind = saved.kind;
     show("work");
