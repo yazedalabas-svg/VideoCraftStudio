@@ -169,3 +169,4 @@ select {
   * { transition: none !important; animation: none !important; }
 }
 .compare.is-single::after { display: none; }
+[tabindex="-1"]:focus { outline: none; }
