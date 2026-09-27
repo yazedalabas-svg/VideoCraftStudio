@@ -36,6 +36,8 @@ from . import media
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "200"))
 MAX_VIDEO_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "180"))
 MAX_IMAGE_MEGAPIXELS = int(os.environ.get("MAX_IMAGE_MEGAPIXELS", "40"))
+# Upscaled output is capped so a ×4 of a big photo can't exhaust the 512 MB instance.
+MAX_OUTPUT_MEGAPIXELS = int(os.environ.get("MAX_OUTPUT_MEGAPIXELS", "36"))
 MAX_QUEUE = int(os.environ.get("MAX_QUEUE", "5"))
 JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT_SECONDS", "2700"))
 RESULT_TTL = int(os.environ.get("RESULT_TTL_SECONDS", "3600"))
@@ -45,6 +47,7 @@ ALLOWED_SUFFIXES = VIDEO_SUFFIXES | IMAGE_SUFFIXES
 
 VIDEO_RESOLUTIONS = ("source", "1080p")
 IMAGE_RESOLUTIONS = ("source", "1080p", "2k", "4k")
+IMAGE_UPSCALES = ("none", "2", "3", "4", "4k")
 COLOR_STYLES = ("none", "natural", "warm", "bright", "cinematic")
 
 WORK_ROOT = Path(tempfile.gettempdir()) / "videocraft-jobs"
@@ -98,6 +101,9 @@ def settings_from_options(options: dict, info: MediaInfo) -> ExportSettings:
     """Whitelist and clamp browser options into engine settings (never trust the client)."""
     resolutions = IMAGE_RESOLUTIONS if info.is_image else VIDEO_RESOLUTIONS
     resolution = options.get("resolution") if options.get("resolution") in resolutions else "source"
+    if info.is_image and options.get("upscale") in IMAGE_UPSCALES:
+        # The upscale choice (see upscale_size) replaces the resolution preset for stills.
+        resolution = "source"
 
     source_fps = round(info.fps) if info.fps else 30
     fps_choice = str(options.get("fps", "source"))
@@ -125,6 +131,31 @@ def settings_from_options(options: dict, info: MediaInfo) -> ExportSettings:
         safe_mode=True,
         ai_enabled=False,  # neural models need the Windows app + a GPU
     )
+
+
+def upscale_size(info: MediaInfo, choice) -> tuple[int, int] | None:
+    """Exact output size for ×2/×3/×4 or "fit 4K", shrunk to fit MAX_OUTPUT_MEGAPIXELS.
+
+    Never returns a size smaller than the source: upscaling only enlarges.
+    """
+    src_w, src_h = info.display_width, info.display_height
+    choice = str(choice)
+    if choice in ("2", "3", "4"):
+        factor = float(choice)
+    elif choice == "4k":
+        box_w, box_h = (2160, 3840) if src_h > src_w else (2160, 2160) if src_w == src_h else (3840, 2160)
+        factor = min(box_w / src_w, box_h / src_h)
+    else:
+        return None
+    width, height = int(src_w * factor), int(src_h * factor)
+    limit = MAX_OUTPUT_MEGAPIXELS * 1_000_000
+    if width * height > limit:
+        shrink = (limit / (width * height)) ** 0.5
+        width, height = int(width * shrink), int(height * shrink)
+    width, height = max(2, width - width % 2), max(2, height - height % 2)
+    if width <= src_w and height <= src_h:
+        return None  # already that big (or at the cap): nothing to enlarge
+    return width, height
 
 
 def _fast_server_preset(command: list[str]) -> list[str]:
@@ -244,7 +275,10 @@ class JobManager:
             fmt = job.options.get("image_format")
             suffix = IMAGE_OUTPUT_SUFFIXES.get(fmt, ".png")
             output = job.folder / f"result{suffix}"
-            command = build_image_ffmpeg_command(job.source, output, info, settings)
+            force_size = upscale_size(info, job.options.get("upscale"))
+            command = build_image_ffmpeg_command(job.source, output, info, settings, force_size=force_size)
+            if force_size:
+                job.info["output_width"], job.info["output_height"] = force_size
         else:
             suffix = ".mp4"
             output = job.folder / "result.mp4"

@@ -56,6 +56,8 @@ async def config(_: Request) -> JSONResponse:
             "max_image_megapixels": jobs.MAX_IMAGE_MEGAPIXELS,
             "video_resolutions": list(jobs.VIDEO_RESOLUTIONS),
             "image_resolutions": list(jobs.IMAGE_RESOLUTIONS),
+            "image_upscales": list(jobs.IMAGE_UPSCALES),
+            "max_output_megapixels": jobs.MAX_OUTPUT_MEGAPIXELS,
             "accept": sorted(jobs.ALLOWED_SUFFIXES),
             "ffmpeg": bool(FFMPEG),
         }

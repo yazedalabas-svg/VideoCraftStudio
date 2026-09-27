@@ -15,6 +15,7 @@
   };
   const SLIDERS = ["denoise", "sharpness", "brightness", "contrast", "saturation", "quality"];
   const STORE_KEY = "videocraft-job";
+  const ltr = (text) => `\u2066${text}\u2069`; // keep "1600×1200" readable inside Arabic text
 
   const ext = (name) => (name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
   const formatSize = (bytes) => {
@@ -37,6 +38,7 @@
   let jobId = null;
   let pollTimer = null;
   let upload = null;
+  let imageSize = null; // natural size of the picked image, for the upscale preview
 
   // ---------- Views ----------
   const views = ["pick", "setup", "work", "done", "failed"];
@@ -82,7 +84,11 @@
     thumb.replaceChildren();
     const media = document.createElement(kind === "image" ? "img" : "video");
     media.src = sourceUrl;
-    if (kind === "image") media.alt = ""; else { media.muted = true; media.preload = "metadata"; }
+    imageSize = null;
+    if (kind === "image") {
+      media.alt = "";
+      media.onload = () => { imageSize = { w: media.naturalWidth, h: media.naturalHeight }; updateUpscaleHint(); };
+    } else { media.muted = true; media.preload = "metadata"; }
     media.onerror = () => media.remove();
     thumb.append(media);
 
@@ -106,7 +112,8 @@
     const res = $("resolution");
     const allowed = kind === "image" ? config.image_resolutions : config.video_resolutions;
     res.replaceChildren(...allowed.map((v) => new Option(RES_LABELS[v] || v, v)));
-    res.value = allowed.includes("1080p") && kind === "video" ? "source" : allowed[0];
+    res.value = "source";
+    updateUpscaleHint();
 
     show("setup");
   }
@@ -136,9 +143,36 @@
     if (e.target.name === "preset") applyPreset(e.target.value);
   });
 
+  // Mirrors web/jobs.py upscale_size(): ×N or "fit 4K", capped by the server's megapixel limit, never smaller.
+  function upscaleSize(w, h, choice) {
+    let factor;
+    if (["2", "3", "4"].includes(choice)) factor = Number(choice);
+    else if (choice === "4k") {
+      const [bw, bh] = h > w ? [2160, 3840] : w === h ? [2160, 2160] : [3840, 2160];
+      factor = Math.min(bw / w, bh / h);
+    } else return null;
+    let ow = Math.floor(w * factor), oh = Math.floor(h * factor);
+    const cap = (config.max_output_megapixels || 36) * 1e6;
+    if (ow * oh > cap) { const k = Math.sqrt(cap / (ow * oh)); ow = Math.floor(ow * k); oh = Math.floor(oh * k); }
+    ow = Math.max(2, ow - (ow % 2)); oh = Math.max(2, oh - (oh % 2));
+    return ow <= w && oh <= h ? null : [ow, oh];
+  }
+
+  function updateUpscaleHint() {
+    const hint = $("upscale-size");
+    if (!imageSize) { hint.textContent = ""; return; }
+    const { w, h } = imageSize;
+    const choice = form.elements.upscale.value;
+    const out = upscaleSize(w, h, choice);
+    hint.textContent = out
+      ? `النتيجة: ${ltr(`${w}×${h} → ${out[0]}×${out[1]}`)}`
+      : choice === "none" ? `المقاس: ${ltr(`${w}×${h}`)} (بدون تغيير)` : `المقاس ${ltr(`${w}×${h}`)} كبير أصلًا، ما يحتاج تكبير`;
+  }
+  form.elements.upscale.addEventListener("change", updateUpscaleHint);
+
   function collectOptions() {
     const o = {};
-    ["resolution", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
+    ["resolution", "upscale", "fps", "color_style", "image_format", ...SLIDERS].forEach((k) => { o[k] = form.elements[k].value; });
     ["interpolate", "stabilize", "deinterlace", "audio_normalize", "audio_clean"].forEach((k) => { o[k] = form.elements[k].checked; });
     return o;
   }
@@ -258,7 +292,8 @@
       if (sourceUrl) { before.src = sourceUrl; before.onerror = () => { before.closest("figure").hidden = true; }; }
     }
     const info = job.info || {};
-    $("done-info").textContent = info.width ? `الأصل: ${info.width}×${info.height}${info.duration ? ` • ${Math.round(info.duration)} ث` : ""}` : "";
+    const upscaled = info.output_width ? ` • بعد التكبير: ${ltr(`${info.output_width}×${info.output_height}`)}` : "";
+    $("done-info").textContent = info.width ? `الأصل: ${ltr(`${info.width}×${info.height}`)}${upscaled}${info.duration ? ` • ${Math.round(info.duration)} ث` : ""}` : "";
     $("tweak").hidden = !file;
     show("done");
   }

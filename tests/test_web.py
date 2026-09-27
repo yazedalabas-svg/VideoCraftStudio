@@ -3,7 +3,7 @@
 import unittest
 from pathlib import Path
 
-from web.jobs import settings_from_options
+from web.jobs import settings_from_options, upscale_size
 from web.media import parse_ffmpeg_info
 from video_engine import MediaInfo
 
@@ -67,6 +67,30 @@ class SettingsFromOptionsTests(unittest.TestCase):
     def test_images_may_use_4k(self):
         s = settings_from_options({"resolution": "4k"}, _video(is_image=True, fps=0.0, duration=0.0))
         self.assertEqual(s.resolution, "4k")
+
+
+class UpscaleSizeTests(unittest.TestCase):
+    def _image(self, w, h):
+        return _video(width=w, height=h, is_image=True, fps=0.0, duration=0.0)
+
+    def test_multiplies_exactly(self):
+        self.assertEqual(upscale_size(self._image(400, 300), "2"), (800, 600))
+        self.assertEqual(upscale_size(self._image(400, 300), "4"), (1600, 1200))
+
+    def test_caps_huge_output_and_keeps_aspect(self):
+        w, h = upscale_size(self._image(4000, 3000), "4")
+        self.assertLessEqual(w * h, 36_000_000)
+        self.assertAlmostEqual(w / h, 4 / 3, places=2)
+        self.assertGreater(w, 4000)
+
+    def test_fit_4k_never_shrinks_wide_images(self):
+        self.assertIsNone(upscale_size(self._image(4000, 1000), "4k"))
+        self.assertEqual(upscale_size(self._image(1920, 1080), "4k"), (3840, 2160))
+        self.assertEqual(upscale_size(self._image(1080, 1920), "4k"), (2160, 3840))
+
+    def test_none_and_junk(self):
+        self.assertIsNone(upscale_size(self._image(400, 300), "none"))
+        self.assertIsNone(upscale_size(self._image(400, 300), "99"))
 
 
 if __name__ == "__main__":
