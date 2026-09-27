@@ -191,6 +191,17 @@
   }
   const useAI = () => kind === "image" && AI_SUPPORTED && aiToggle.checked;
 
+  // If AI got stuck on this device before, start with it off so nobody waits again
+  // (the visitor can still switch it back on; that clears the memory).
+  const AI_OFF_KEY = "videocraft-ai-failed";
+  const aiFailedHere = () => { try { return Date.now() - Number(localStorage.getItem(AI_OFF_KEY) || 0) < 7 * 864e5; } catch { return false; } };
+  const rememberAiFailed = (failed) => { try { failed ? localStorage.setItem(AI_OFF_KEY, String(Date.now())) : localStorage.removeItem(AI_OFF_KEY); } catch { /* storage blocked */ } };
+  if (AI_SUPPORTED && aiFailedHere()) {
+    aiToggle.checked = false;
+    $("ai-status").textContent = "ℹ️ الذكاء الاصطناعي علّق في هذا الجهاز قبل، فطفّيناه وصار التكبير عادي. تقدر تشغّله يدويًا.";
+  }
+  aiToggle.addEventListener("change", () => { if (aiToggle.checked) rememberAiFailed(false); });
+
   // The AI models only do ×2 and ×4, so the other upscale choices are disabled while AI is on.
   function syncAiControls() {
     const on = useAI();
@@ -211,7 +222,7 @@
   let warmToken = 0;
   function warmUp() {
     const status = $("ai-status");
-    if (!useAI()) { status.textContent = ""; return; }
+    if (!useAI()) { if (!aiFailedHere()) status.textContent = ""; return; }
     const token = ++warmToken;
     const model = form.elements.ai_model.value;
     const scale = Number(form.elements.upscale.value);
@@ -288,6 +299,7 @@
       // AI can't run in this browser (no GPU access, a hanging in-app browser, a timeout…):
       // don't leave the visitor stuck — do the same enlargement with the server's regular upscaler.
       console.warn("AI upscale failed, falling back to the server:", err);
+      rememberAiFailed(true);
       aiToggle.checked = false;
       syncAiControls();
       $("ai-status").textContent = "⚠️ الذكاء الاصطناعي ما اشتغل في هذا المتصفح، فاستخدمنا التكبير العادي.";
