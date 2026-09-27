@@ -6,3 +6,5 @@ launcher/obj/
 ui_preview.png
 .claude/settings.local.json
 tools/*.zip
+build/
+*.egg-info/

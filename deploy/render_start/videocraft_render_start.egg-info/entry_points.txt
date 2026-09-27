@@ -1,3 +1,0 @@
-[console_scripts]
-0 = videocraft_render_start:main
-videocraft-site = videocraft_render_start:main
