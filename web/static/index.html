@@ -9,6 +9,7 @@
 <link rel="icon" href="/about/videocraft.svg">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/ai.js" defer></script>
+<script src="/static/viewer.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -172,11 +173,32 @@
   <section id="done" class="panel" aria-labelledby="done-title" hidden>
     <h2 id="done-title">النتيجة جاهزة ✨</h2>
 
-    <div id="compare-image" class="compare" hidden>
-      <img id="after-img" alt="بعد التحسين">
-      <div class="compare-before" id="before-wrap"><img id="before-img" alt="قبل التحسين"></div>
-      <span class="tag tag-before">قبل</span><span class="tag tag-after">بعد</span>
-      <input type="range" id="compare-range" min="0" max="100" value="50" aria-label="مقارنة قبل وبعد">
+    <div id="compare-image" class="viewer" hidden>
+      <div class="viewer-tools" role="toolbar" aria-label="أدوات التكبير والمقارنة">
+        <button type="button" class="tool" data-zoom="out" aria-label="تصغير" title="تصغير">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/></svg>
+        </button>
+        <output class="zoom-level" id="zoom-level" aria-live="polite">100%</output>
+        <button type="button" class="tool" data-zoom="in" aria-label="تكبير" title="تكبير">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6M11 8v6"/></svg>
+        </button>
+        <button type="button" class="tool tool-text" data-zoom="actual" title="كل بكسل في الصورة = بكسل على الشاشة">1:1</button>
+        <button type="button" class="tool" data-zoom="fit" aria-label="ملاءمة الإطار" title="ملاءمة الإطار">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4"/></svg>
+        </button>
+        <button type="button" class="tool" data-zoom="full" aria-label="ملء الشاشة" title="ملء الشاشة">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        </button>
+      </div>
+
+      <div class="compare" id="compare-view">
+        <img id="after-img" alt="بعد التحسين" draggable="false">
+        <div class="compare-before" id="before-wrap"><img id="before-img" alt="قبل التحسين" draggable="false"></div>
+        <span class="tag tag-before">قبل</span><span class="tag tag-after">بعد</span>
+        <div class="split" id="split" role="slider" tabindex="0" aria-label="خط المقارنة بين قبل وبعد"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"><span class="knob" aria-hidden="true">⟷</span></div>
+      </div>
+      <p class="hint viewer-hint">اسحب الخط للمقارنة • دبل كليك أو Ctrl + العجلة أو قرصة الإصبعين للتكبير • اسحب الصورة للتنقل</p>
     </div>
 
     <div id="compare-video" class="videos" hidden>
