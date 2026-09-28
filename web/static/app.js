@@ -45,13 +45,18 @@
   let jobId = null;
   let pollTimer = null;
   let imageSize = null; // natural size of the picked image, for the upscale preview
+  let imageUndecodable = false; // the browser can't decode it (HEIC on Android…)
+  let aiAutoOff = ""; // why AI was switched off for this photo (shown to the visitor)
   let videoDuration = 0; // seconds, when the browser can read it (checked before uploading)
   let aiAbort = null; // AbortController while the in-browser AI is running
   let aiInfo = ""; // e.g. "Real-CUGAN ×4 • webgpu", shown with the result
   let localResultUrl = null; // blob: URL of a result made on this device (AI mode)
   let resultNote = ""; // extra line under the result, e.g. why AI was skipped
   const AI_SUPPORTED = Boolean(window.VCAI && VCAI.supported());
-  const AI_MAX_OUTPUT_MP = 36; // same cap as the server, keeps browser memory sane
+  // iPhone/iPad Safari refuses canvases above ~16.7 MP (the AI result is drawn on one);
+  // elsewhere the cap matches the server's and keeps browser memory sane.
+  const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const AI_MAX_OUTPUT_MP = IS_IOS ? 16 : 36;
 
   // ---------- Views ----------
   const views = ["pick", "setup", "work", "done", "failed"];
@@ -115,11 +120,28 @@
     const media = document.createElement(kind === "image" ? "img" : "video");
     media.src = sourceUrl;
     imageSize = null;
+    // AI switched off only because of the previous photo → back on for this one.
+    if (aiAutoOff && AI_SUPPORTED && !aiFailedHere()) aiToggle.checked = true;
+    aiAutoOff = "";
     if (kind === "image") {
       media.alt = "";
-      media.onload = () => { imageSize = { w: media.naturalWidth, h: media.naturalHeight }; updateUpscaleHint(); };
-    } else { media.muted = true; media.preload = "metadata"; }
-    media.onerror = () => media.remove();
+      imageUndecodable = false;
+      media.onload = () => {
+        imageSize = { w: media.naturalWidth, h: media.naturalHeight };
+        fitChoicesToPhoto();
+      };
+      // This browser can't show the file (e.g. HEIC on Android): the server converts it,
+      // but the on-device AI can't read it either.
+      media.onerror = () => {
+        media.remove();
+        imageUndecodable = true;
+        fitChoicesToPhoto();
+      };
+    } else {
+      media.muted = true;
+      media.preload = "metadata";
+      media.onerror = () => media.remove();
+    }
     thumb.append(media);
 
     // Duration check for video (when the browser can read it)
@@ -311,9 +333,42 @@
     const model = form.elements.ai_model.value;
     const plan = kind === "image" && imageSize && aiPlan(imageSize.w, imageSize.h, form.elements.upscale.value);
     const scale = plan && plan.scale ? plan.scale : 2; // video frames are always ×2
-    VCAI.prepare(model, scale, (text) => { if (token === warmToken) status.textContent = `⏳ ${text}`; })
-      .then(() => { if (token === warmToken) status.textContent = "✅ النموذج جاهز على كرت الشاشة"; })
-      .catch(() => { if (token === warmToken) status.textContent = ""; }); // the real run reports errors
+    // Only the latest warm-up may write, and only while AI is still on (it can be switched
+    // off automatically once the photo's size is known).
+    const current = () => token === warmToken && (useAI() || useVideoAI());
+    VCAI.prepare(model, scale, (text) => { if (current()) status.textContent = `⏳ ${text}`; })
+      .then(() => { if (current()) status.textContent = "✅ النموذج جاهز على كرت الشاشة"; })
+      .catch(() => { if (current()) status.textContent = ""; }); // the real run reports errors
+  }
+
+  // Phone photos are usually 12 MP or more — already past 2K — so the defaults adapt:
+  // big photos keep their size (the enhancement still applies), and AI switches itself
+  // off with a reason when it can't serve the photo, instead of blocking the start button.
+  function fitChoicesToPhoto() {
+    if (kind !== "image") return;
+    aiAutoOff = "";
+    const select = form.elements.upscale;
+    if (imageSize) {
+      const { w, h } = imageSize;
+      const reaches = (v) => Boolean(upscaleSize(w, h, v));
+      if (!reaches(select.value)) select.value = ["2k", "4k"].find(reaches) || "none";
+    }
+    if (AI_SUPPORTED && aiToggle.checked) {
+      if (imageUndecodable) {
+        aiAutoOff = "ℹ️ متصفحك ما يقرأ صيغة هذه الصورة، فبيحسّنها الخادم بالطريقة العادية.";
+      } else if (imageSize) {
+        const plan = aiPlan(imageSize.w, imageSize.h, select.value === "none" ? "2" : select.value);
+        if (!plan || !plan.scale) {
+          aiAutoOff = `ℹ️ الصورة كبيرة وواضحة (${ltr(`${imageSize.w}×${imageSize.h}`)})، فالتحسين العادي أنسب لها من الذكاء الاصطناعي على الجوال.`;
+        }
+      }
+      if (aiAutoOff) {
+        aiToggle.checked = false;
+        $("ai-status").textContent = aiAutoOff;
+      }
+    }
+    syncAiControls();
+    if (aiAutoOff) $("ai-status").textContent = aiAutoOff; // keep the reason visible
   }
 
   // Returns an Arabic message if the image is too big for an AI upscale, else "".
@@ -360,7 +415,12 @@
       return;
     }
     const problem = aiSizeProblem();
-    if (problem) { $("upscale-size").textContent = problem; form.elements.upscale.focus(); return; }
+    if (problem) {
+      // Don't dead-end: this choice doesn't suit AI, so do it the regular way and say why.
+      aiToggle.checked = false;
+      syncAiControls();
+      $("ai-status").textContent = `ℹ️ ${problem.replace(/ ?طفّه.*$/, "")} استخدمنا التحسين العادي.`;
+    }
 
     $("start").disabled = true;
     show("work");

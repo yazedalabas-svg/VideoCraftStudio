@@ -211,6 +211,55 @@ class AiVideoPlanTests(unittest.TestCase):
         self.assertEqual((p["width"], p["height"]), (320, 240))  # already below 360p: no upscale here
 
 
+try:
+    from PIL import Image as PILImage
+except ImportError:  # pragma: no cover
+    PILImage = None
+
+
+@unittest.skipUnless(PILImage, "Pillow not installed")
+class PhonePhotoTests(unittest.TestCase):
+    """Upright phones photos: EXIF rotation and HEIC are normalised before FFmpeg."""
+
+    def _photo(self, folder, name, orientation):
+        img = PILImage.new("RGB", (40, 30), (0, 0, 255))
+        img.paste((255, 0, 0), (0, 0, 10, 10))  # marker: top-left of the stored pixels
+        exif = PILImage.Exif()
+        exif[0x0112] = orientation
+        path = Path(folder) / name
+        img.save(path, exif=exif.tobytes())
+        return path
+
+    def test_exif_rotated_jpeg_becomes_upright(self):
+        import tempfile
+        from web.media import normalize_photo
+        with tempfile.TemporaryDirectory() as tmp:
+            out = normalize_photo(self._photo(tmp, "IMG.jpg", 6))
+            with PILImage.open(out) as im:
+                self.assertEqual(im.size, (30, 40))  # portrait now
+                self.assertGreater(im.convert("RGB").getpixel((27, 2))[0], 200)  # marker moved top-right
+
+    def test_upright_jpeg_is_left_alone(self):
+        import tempfile
+        from web.media import normalize_photo
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(normalize_photo(self._photo(tmp, "IMG.jpg", 1)))
+
+    def test_heic_is_converted(self):
+        import tempfile
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        except ImportError:
+            self.skipTest("pillow-heif not installed")
+        from web.media import normalize_photo
+        with tempfile.TemporaryDirectory() as tmp:
+            out = normalize_photo(self._photo(tmp, "IMG.heic", 6))
+            self.assertEqual(out.suffix, ".jpg")
+            with PILImage.open(out) as im:
+                self.assertEqual(im.size, (30, 40))
+
+
 try:  # the HTTP tests need httpx (Starlette's TestClient); skip them where it isn't installed
     from starlette.testclient import TestClient
 except Exception:  # pragma: no cover
