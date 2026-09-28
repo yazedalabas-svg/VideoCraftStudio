@@ -117,6 +117,46 @@ def is_hdr(text: str) -> bool:
     return hdr_transfer(text) is not None
 
 
+# --- Phone photos ---------------------------------------------------------------
+# Phones store upright photos sideways plus an EXIF "rotate me" flag, which FFmpeg
+# ignores (results came out sideways), and iPhones save HEIC as a grid of HEVC tiles,
+# which this FFmpeg can't assemble. Pillow (+ pillow-heif) handles both, so such
+# photos are normalised to an upright JPEG before the normal pipeline sees them.
+HEIF_SUFFIXES = {".heic", ".heif"}
+EXIF_ORIENTATION = 0x0112
+
+
+def normalize_photo(path: Path) -> Path | None:
+    """Upright JPEG copy of a HEIC/HEIF or EXIF-rotated photo; None when not needed or not possible."""
+    suffix = path.suffix.lower()
+    if suffix not in HEIF_SUFFIXES | {".jpg", ".jpeg", ".jfif", ".webp", ".tif", ".tiff", ".png"}:
+        return None
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return None
+    if suffix in HEIF_SUFFIXES:
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+        except ImportError:
+            return None
+    Image.MAX_IMAGE_PIXELS = 120_000_000  # phone photos go up to ~50 MP; refuse absurd files
+    try:
+        with Image.open(path) as img:
+            rotated = img.getexif().get(EXIF_ORIENTATION, 1) not in (0, 1)
+            if suffix not in HEIF_SUFFIXES and not rotated:
+                return None  # already fine for FFmpeg
+            upright = ImageOps.exif_transpose(img)
+            if upright.mode not in ("RGB", "L"):
+                upright = upright.convert("RGB")
+            out = path.with_name("photo.jpg")
+            upright.save(out, "JPEG", quality=95, subsampling=0)
+            return out
+    except Exception as exc:  # unreadable or unsupported: say so plainly
+        raise VideoEngineError(f"تعذّر قراءة الصورة ({suffix}). جرّب JPG أو PNG.") from exc
+
+
 def probe(path: Path) -> MediaInfo:
     return probe_details(path)[0]
 

@@ -109,7 +109,13 @@ window.VCAI = (() => {
   }
 
   async function decode(file) {
-    const bitmap = await createImageBitmap(file);
+    // Respect the EXIF rotation of phone photos (the explicit option is for older Safari).
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      bitmap = await createImageBitmap(file);
+    }
     const canvas = document.createElement("canvas");
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;

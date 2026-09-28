@@ -442,6 +442,10 @@ class JobManager:
                     job.source.unlink(missing_ok=True)
 
     def _run(self, job: Job) -> None:
+        upright = media.normalize_photo(job.source)  # HEIC / EXIF-rotated phone photos
+        if upright:
+            job.source.unlink(missing_ok=True)
+            job.source = upright
         info, extras = media.probe_details(job.source)
         job.kind = "image" if info.is_image else "video"
         job.info = {
