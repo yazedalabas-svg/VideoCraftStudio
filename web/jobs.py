@@ -401,6 +401,11 @@ class JobManager:
         if job.status == "awaiting_ai":
             self._finish(job, "cancelled", "تم الإلغاء.")
             job.source.unlink(missing_ok=True)
+            # The frames (and the "before" clip) can be hundreds of MB; free the disk now.
+            for sub in ("frames", "up"):
+                shutil.rmtree(job.folder / sub, ignore_errors=True)
+            if job.before:
+                job.before.unlink(missing_ok=True)
         elif job.status == "queued":
             self._finish(job, "cancelled", "تم الإلغاء.")
             job.source.unlink(missing_ok=True)
@@ -422,7 +427,7 @@ class JobManager:
         while True:
             job_id = self._queue.get()
             job = self.get(job_id)
-            if not job or job.status != "queued":
+            if not job or job.status != "queued" or job.cancel_requested:
                 continue
             job.status = "running"
             job.message = "جاري تحليل الملف…" if job.phase != "assemble" else "جاري تجميع الفيديو…"
@@ -606,7 +611,8 @@ class JobManager:
             return
         if not output.is_file() or output.stat().st_size == 0:
             raise VideoEngineError("ما قدرت أجمّع الفيديو. جرّب مرة ثانية.")
-        shutil.rmtree(job.folder / "up", ignore_errors=True)  # the result holds them now
+        for sub in ("frames", "up"):  # the result (and before.mp4) hold them now
+            shutil.rmtree(job.folder / sub, ignore_errors=True)
         job.output = output
         job.download_name = f"{_safe_stem(job.filename)}-videocraft-ai.mp4"
         job.info["output_width"], job.info["output_height"] = p["out_width"], p["out_height"]
@@ -618,6 +624,8 @@ class JobManager:
 
         The last command reports progress on stdout (-progress pipe:1).
         """
+        if job.cancel_requested:  # cancelled while probing or between passes
+            return
         stages = command if command and isinstance(command[0], list) else [command]
         logs = [job.folder / f"ffmpeg{i}.log" for i in range(len(stages))]
         processes: list[subprocess.Popen] = []
@@ -647,6 +655,8 @@ class JobManager:
 
             job.process = processes[-1]
             job.kill = kill_all
+            if job.cancel_requested:  # cancel arrived before there was anything to kill
+                kill_all()
             timer = threading.Timer(max(JOB_TIMEOUT, duration * 40), kill_all)
             timer.start()
             started = time.time()
@@ -705,19 +715,26 @@ class JobManager:
     def _janitor(self) -> None:
         while True:
             time.sleep(300)
-            now = time.time()
-            with self._lock:
-                expired = [
-                    job for job in self._jobs.values()
-                    if (job.finished and now - job.finished > RESULT_TTL)
-                    or (job.status == "awaiting_ai" and now - job.touched > RESULT_TTL)
-                ]
-                for job in expired:
-                    del self._jobs[job.id]
+            try:
+                self._clean_up()
+            except Exception:  # a stray error must not stop cleanup for good (disk fills up)
+                pass
+
+    def _clean_up(self) -> None:
+        now = time.time()
+        with self._lock:
+            expired = [
+                job for job in self._jobs.values()
+                if (job.finished and now - job.finished > RESULT_TTL)
+                or (job.status == "awaiting_ai" and now - job.touched > RESULT_TTL)
+            ]
             for job in expired:
-                shutil.rmtree(job.folder, ignore_errors=True)
-            # Remove abandoned upload folders (e.g. connection dropped mid-upload).
+                del self._jobs[job.id]
+        for job in expired:
+            shutil.rmtree(job.folder, ignore_errors=True)
+        # Remove abandoned upload folders (e.g. connection dropped mid-upload).
+        with self._lock:  # uploads add jobs from the request thread meanwhile
             known = {job.folder for job in self._jobs.values()}
-            for folder in WORK_ROOT.glob("*"):
-                if folder not in known and now - folder.stat().st_mtime > RESULT_TTL:
-                    shutil.rmtree(folder, ignore_errors=True)
+        for folder in WORK_ROOT.glob("*"):
+            if folder not in known and now - folder.stat().st_mtime > RESULT_TTL:
+                shutil.rmtree(folder, ignore_errors=True)
