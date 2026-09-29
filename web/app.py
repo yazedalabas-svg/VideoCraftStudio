@@ -41,6 +41,27 @@ def error(message: str, status: int) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status)
 
 
+def too_big() -> JSONResponse:
+    mb = jobs.MAX_UPLOAD_MB
+    limit = f"{mb / 1024:g} غيغابايت" if mb >= 1024 else f"{mb} ميغابايت"
+    return error(f"الملف أكبر من الحد المسموح ({limit}).", 413)
+
+
+async def read_capped(request: Request, limit: int) -> bytes | None:
+    """The request body, or None if it is bigger than `limit` (read no further: the
+    instance has 512 MB, and `request.body()` would hold any size in memory)."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        return None
+    parts, size = [], 0
+    async for part in request.stream():
+        size += len(part)
+        if size > limit:
+            return None
+        parts.append(part)
+    return b"".join(parts)
+
+
 async def index(_: Request) -> FileResponse:
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
@@ -94,7 +115,7 @@ async def create_job(request: Request) -> JSONResponse:
     limit = jobs.MAX_UPLOAD_MB * 1024 * 1024
     declared = request.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > limit:
-        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB // 1024} غيغابايت).", 413)
+        return too_big()
     if declared and declared.isdigit() and not jobs.disk_has_room(int(declared)):
         return error("مساحة الخادم ما تكفي لهذا الملف الآن. جرّب ملفًا أصغر أو بعد شوي.", 507)
 
@@ -114,7 +135,7 @@ async def create_job(request: Request) -> JSONResponse:
                 out.write(chunk)
     except OverflowError:
         source.unlink(missing_ok=True)
-        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB} ميغابايت).", 413)
+        return too_big()
     except Exception:
         source.unlink(missing_ok=True)
         return error("انقطع الرفع. حاول مرة ثانية.", 400)
@@ -160,7 +181,7 @@ async def upload_start(request: Request) -> JSONResponse:
     if not size.isdigit() or int(size) == 0:
         return error("الملف فارغ.", 400)
     if int(size) > jobs.MAX_UPLOAD_MB * 1024 * 1024:
-        return error(f"الملف أكبر من الحد المسموح ({jobs.MAX_UPLOAD_MB // 1024} غيغابايت).", 413)
+        return too_big()
     if not jobs.disk_has_room(int(size)):
         return error("مساحة الخادم ما تكفي لهذا الملف الآن. جرّب ملفًا أصغر أو بعد شوي.", 507)
     try:
@@ -182,8 +203,8 @@ async def upload_chunk(request: Request) -> JSONResponse:
     if not offset.isdigit() or int(offset) > have:
         return JSONResponse({"error": "ترتيب الأجزاء غير صحيح.", "received": have}, status_code=409)
     offset = int(offset)
-    body = await request.body()
-    if not body or len(body) > MAX_CHUNK or offset + len(body) > upload["size"]:
+    body = await read_capped(request, MAX_CHUNK)
+    if not body or offset + len(body) > upload["size"]:
         return error("جزء غير صالح.", 400)
     with open(source, "r+b") as out:
         out.seek(offset)
@@ -228,7 +249,7 @@ async def job_cancel(request: Request) -> JSONResponse:
     job = _job_or_404(request)
     if not job:
         return error("المهمة غير موجودة.", 404)
-    if job.status in ("queued", "running"):
+    if job.status in ("queued", "running", "awaiting_ai"):
         manager.cancel(job)
     return JSONResponse(job.public(None))
 
@@ -274,8 +295,8 @@ async def frame_put(request: Request) -> JSONResponse:
     job, n = _ai_job(request)
     if not job or n == -1:
         return error("الإطار غير موجود.", 404)
-    body = await request.body()
-    if not body or len(body) > MAX_FRAME_BYTES or not body.startswith(b"\xff\xd8"):
+    body = await read_capped(request, MAX_FRAME_BYTES)
+    if not body or not body.startswith(b"\xff\xd8"):
         return error("إطار غير صالح (المطلوب JPEG).", 400)
     target = aivideo.frame_path(job.folder, "up", n)
     tmp = target.with_suffix(".part")

@@ -624,16 +624,18 @@
   async function poll() {
     clearTimeout(pollTimer);
     if (!jobId) return;
+    const id = jobId;
     let job;
     let response;
     try {
-      response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+      response = await fetch(`/api/jobs/${encodeURIComponent(id)}`, { cache: "no-store" });
       job = await response.json();
     } catch {
       // Network blip or the free instance waking up: keep waiting instead of failing.
-      pollTimer = setTimeout(poll, 4000);
+      if (id === jobId) pollTimer = setTimeout(poll, 4000);
       return;
     }
+    if (id !== jobId) return; // cancelled (or a new file started) while this reply was on its way
     if (!response.ok) {
       store.clear();
       // A job saved from an earlier visit has expired: start fresh without an error.
