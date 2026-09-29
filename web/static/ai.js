@@ -9,11 +9,12 @@
 //
 // Usage:
 //   VCAI.prepare("photo", 2, onStatus);                 // optional warm-up
-//   const { canvas } = await VCAI.upscale(file, { model, scale, onProgress, signal });
+//   const { blob } = await VCAI.upscale(file, { model, scale, onProgress, signal, finish });
 window.VCAI = (() => {
   "use strict";
 
   const QUIET_LIMIT = 40000; // ms without any message from the worker = stuck
+  let quietLimit = QUIET_LIMIT; // the worker may ask for longer (e.g. while encoding a big file)
 
   const MODELS = {
     photo: { label: "Real-ESRGAN (صور)", path: () => "realesrgan/general_fast-64", native: () => 4 },
@@ -36,6 +37,7 @@ window.VCAI = (() => {
     worker = new Worker("/static/ai-worker.js");
     worker.onmessage = ({ data: msg }) => {
       lastMessage = Date.now();
+      quietLimit = msg.quiet || QUIET_LIMIT;
       if (msg.type === "status") {
         lastStatus = [msg.text, msg.fraction];
         pending.forEach((p) => p.onStatus?.(msg.text, msg.fraction));
@@ -70,7 +72,7 @@ window.VCAI = (() => {
     const id = nextId++;
     lastMessage = Date.now();
     watchdog ??= setInterval(() => {
-      if (pending.size && Date.now() - lastMessage > QUIET_LIMIT) {
+      if (pending.size && Date.now() - lastMessage > quietLimit) {
         reset(new Error("كرت الشاشة في هذا الجهاز ما استجاب"));
       }
     }, 1000);
@@ -108,22 +110,7 @@ window.VCAI = (() => {
     return job;
   }
 
-  async function decode(file) {
-    // Respect the EXIF rotation of phone photos (the explicit option is for older Safari).
-    let bitmap;
-    try {
-      bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
-    } catch {
-      bitmap = await createImageBitmap(file);
-    }
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close?.();
-    return ctx.getImageData(0, 0, canvas.width, canvas.height);
-  }
+
 
   /**
    * @param {Blob} file         source image
@@ -132,30 +119,32 @@ window.VCAI = (() => {
    * @param {2|4} opts.scale    requested enlargement
    * @param {(fraction:number, stage:string)=>void} [opts.onProgress]
    * @param {AbortSignal} [opts.signal]  aborting kills the worker at once
-   * @returns {Promise<{canvas: HTMLCanvasElement, width: number, height: number, backend: string, label: string}>}
+   * @param {{type?: string, quality?: number, filter?: string, target?: [number, number]}} [opts.finish]
+   *        output format, CSS filter for colours, and exact output size (all applied in the worker)
+   * @returns {Promise<{blob: Blob, width: number, height: number, filtered: boolean, backend: string, label: string}>}
+   *          filtered=false: this browser can't apply canvas filters, the blob is PNG without colours
    */
-  async function upscale(file, { model = "photo", scale = 2, onProgress, signal } = {}) {
+  async function upscale(file, { model = "photo", scale = 2, onProgress, signal, finish } = {}) {
     const spec = MODELS[model] || MODELS.photo;
     scale = scale === 4 ? 4 : 2;
     const onAbort = () => reset(new DOMException("cancelled", "AbortError"));
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       await prepare(model, scale, (text) => onProgress?.(0, text));
-      const src = await decode(file);
+      // The worker decodes, upscales and encodes: only the finished file comes back.
       const res = await request(
-        { type: "run", path: spec.path(scale), native: spec.native(scale), scale, width: src.width, height: src.height, pixels: src.data.buffer },
-        { onProgress: (f) => onProgress?.(f, "الذكاء الاصطناعي يكبّر الصورة على جهازك…") },
-        [src.data.buffer],
+        { type: "run", path: spec.path(scale), native: spec.native(scale), scale, file, finish },
+        {
+          onProgress: (f) => onProgress?.(f, "الذكاء الاصطناعي يكبّر الصورة على جهازك…"),
+          onStatus: (text) => onProgress?.(1, text),
+        },
       );
-      const canvas = document.createElement("canvas");
-      canvas.width = res.width;
-      canvas.height = res.height;
-      canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(res.pixels), res.width, res.height), 0, 0);
-      return { canvas, width: res.width, height: res.height, backend: res.backend, label: spec.label };
+      return { blob: res.blob, width: res.width, height: res.height, filtered: res.filtered, backend: res.backend, label: spec.label };
     } finally {
       signal?.removeEventListener("abort", onAbort);
     }
   }
+
 
   function supported() {
     if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined") return false;
