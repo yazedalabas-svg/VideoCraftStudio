@@ -5,11 +5,16 @@
 // kill this worker outright if the GPU stops answering (see ai.js).
 //
 // Messages in:  { type: "prepare", path }
-//               { type: "run", path, native, scale, width, height, pixels (ArrayBuffer, RGBA) }
+//               { type: "run", path, native, scale, file (Blob), finish }
+//                 finish = { type: "image/jpeg"|"image/png"|"image/webp", quality, filter, target: [w, h] }
 // Messages out: { type: "status", text, fraction }      while preparing
 //               { type: "ready", backend }
 //               { type: "progress", fraction }          while running
-//               { type: "done", width, height, pixels } (ArrayBuffer, RGBA)
+//               { type: "done", width, height, blob, filtered }   the finished, encoded file
+//
+// Everything heavy happens here — decoding the photo, the model, resizing, colours and
+// the final JPEG/PNG encoding — so the page never holds big pixel buffers and never
+// freezes, even on phones.
 //               { type: "error", message }
 /* global tf */
 "use strict";
@@ -86,9 +91,70 @@ function readTile(src, w, h, x0, y0) {
 }
 
 // `native` is the model's own factor; `scale` is what the visitor asked for (≤ native).
-async function run({ id, path, native, scale, width: w, height: h, pixels }) {
+// Decode off the main thread, honouring the EXIF rotation of phone photos.
+async function decode(file) {
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch {
+    bitmap = await createImageBitmap(file);
+  }
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  canvas.width = canvas.height = 0; // free the backing store now (matters on iPhone)
+  return data;
+}
+
+let filterSupport = null;
+function canvasFilterWorks() {
+  if (filterSupport === null) {
+    try {
+      const ctx = new OffscreenCanvas(1, 1).getContext("2d");
+      ctx.filter = "brightness(0.5)";
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, 1, 1);
+      filterSupport = ctx.getImageData(0, 0, 1, 1).data[0] < 200;
+    } catch {
+      filterSupport = false;
+    }
+  }
+  return filterSupport;
+}
+
+// Pixels → finished file: fit to the requested size, apply colours, encode.
+// Each step hands its canvas over and frees the previous one to keep memory low.
+async function encode(pixels, w, h, finish = {}) {
+  let canvas = new OffscreenCanvas(w, h);
+  canvas.getContext("2d").putImageData(new ImageData(pixels, w, h), 0, 0);
+  const step = (width, height, draw) => {
+    const next = new OffscreenCanvas(width, height);
+    const ctx = next.getContext("2d");
+    draw(ctx);
+    ctx.drawImage(canvas, 0, 0, width, height);
+    canvas.width = canvas.height = 0;
+    canvas = next;
+  };
+  const [tw, th] = finish.target || [w, h];
+  if (tw !== w || th !== h) step(tw, th, (ctx) => { ctx.imageSmoothingQuality = "high"; });
+  const filtered = !finish.filter || canvasFilterWorks();
+  if (finish.filter && filtered) step(canvas.width, canvas.height, (ctx) => { ctx.filter = finish.filter; });
+  // Without canvas filters (older Safari) the page asks the server to do the colours,
+  // so hand over a lossless PNG instead of the requested format.
+  const type = filtered ? finish.type || "image/png" : "image/png";
+  const blob = await canvas.convertToBlob({ type, quality: finish.quality });
+  const size = [canvas.width, canvas.height];
+  canvas.width = canvas.height = 0;
+  return { blob, filtered, width: size[0], height: size[1] };
+}
+
+async function run({ id, path, native, scale, file, finish }) {
   const model = await prepare(path);
-  const src = new Uint8ClampedArray(pixels);
+  const decoded = await decode(file);
+  const { width: w, height: h } = decoded;
+  const src = decoded.data;
   const outW = w * scale;
   const outH = h * scale;
   const out = new Uint8ClampedArray(outW * outH * 4);
@@ -136,7 +202,10 @@ async function run({ id, path, native, scale, width: w, height: h, pixels }) {
       post({ type: "progress", fraction: done / total });
     }
   }
-  post({ type: "done", id, backend, width: outW, height: outH, pixels: out.buffer }, [out.buffer]);
+  // Encoding a big PNG can take a while on a phone: tell the page to allow for it.
+  post({ type: "status", text: "حفظ النتيجة…", fraction: null, quiet: 180000 });
+  const result = await encode(out, outW, outH, finish);
+  post({ type: "done", id, backend, ...result });
 }
 
 self.onmessage = async ({ data: msg }) => {

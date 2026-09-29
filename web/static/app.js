@@ -57,6 +57,8 @@
   // elsewhere the cap matches the server's and keeps browser memory sane.
   const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const AI_MAX_OUTPUT_MP = IS_IOS ? 16 : 36;
+  const IS_PHONE = IS_IOS || /Android|Mobile/i.test(navigator.userAgent);
+  if (IS_PHONE) document.getElementById("image_format").value = "jpg";
 
   // ---------- Views ----------
   const views = ["pick", "setup", "work", "done", "failed"];
@@ -443,12 +445,17 @@
     setProgress(0, "تجهيز الذكاء الاصطناعي…", true);
     aiAbort = new AbortController();
     let result;
+    const plan = aiPlan(imageSize.w, imageSize.h, options.upscale);
+    const filter = colourFilter(options);
     try {
+      // Fitting to the exact size, colours and encoding all happen in the AI worker,
+      // so saving a big result never freezes the page (this is what phones choked on).
       result = await VCAI.upscale(file, {
         model: options.ai_model,
-        scale: aiPlan(imageSize.w, imageSize.h, options.upscale).scale,
+        scale: plan.scale,
         signal: aiAbort.signal,
-        onProgress: (f, stage) => setProgress(f, `${stage} ${f > 0 ? Math.round(f * 100) + "%" : ""}`, f === 0),
+        finish: { type: outputType(options), quality: outputQuality(options), filter, target: plan.target },
+        onProgress: (f, stage) => setProgress(f, `${stage} ${f > 0 && f < 1 ? Math.round(f * 100) + "%" : ""}`, f === 0 || f === 1),
       });
     } catch (err) {
       aiAbort = null;
@@ -465,33 +472,16 @@
       return send(file, file.name, { ...options, upscale: options.upscale });
     }
     aiAbort = null;
-    const plan = aiPlan(imageSize.w, imageSize.h, options.upscale);
     aiInfo = `✨ ${result.label} ×${plan.scale} على كرت الشاشة (${result.backend})`;
-    // Fit the AI output to the exact requested size (e.g. ×4 model → 4K box, or ×3).
-    if (result.canvas.width !== plan.target[0] || result.canvas.height !== plan.target[1]) {
-      const fitted = document.createElement("canvas");
-      [fitted.width, fitted.height] = plan.target;
-      const fctx = fitted.getContext("2d");
-      fctx.imageSmoothingQuality = "high";
-      fctx.drawImage(result.canvas, 0, 0, fitted.width, fitted.height);
-      result.canvas = fitted;
-    }
     const stem = file.name.replace(/\.[^.]+$/, "") || "image";
 
-    // 2) Colours + saving happen right here: no upload, no queue, no download.
-    const filter = colourFilter(options);
-    if (!filter || canvasFilterWorks()) {
-      phase = { base: 0.9, span: 0.1 };
-      setProgress(0.5, "حفظ النتيجة…", true);
-      try {
-        return await finishOnDevice(result.canvas, filter, options, stem);
-      } catch { /* fall back to the server below */ }
-    }
+    // 2) Done on the device: no upload, no queue, no download.
+    if (result.filtered) return showLocalResult(result, stem);
 
-    // Fallback (old browsers without canvas filters): the server applies colours and format.
+    // Old browsers without canvas filters: the worker returned a PNG without colours,
+    // so the server applies them (and the chosen format).
     phase = { base: 0.5, span: 0.5 };
-    const png = await new Promise((r) => result.canvas.toBlob(r, "image/png"));
-    send(png, `${stem}.png`, { ...options, upscale: "none", resolution: "source", denoise: 0, sharpness: 0 });
+    send(result.blob, `${stem}.png`, { ...options, upscale: "none", resolution: "source", denoise: 0, sharpness: 0 });
   }
 
   // ---------- Finishing on the device (AI mode) ----------
@@ -513,45 +503,23 @@
     return parts.join(" ");
   }
 
-  let filterSupport = null;
-  function canvasFilterWorks() {
-    if (filterSupport !== null) return filterSupport;
-    try {
-      const ctx = document.createElement("canvas").getContext("2d");
-      ctx.filter = "brightness(0.5)";
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(0, 0, 1, 1);
-      filterSupport = ctx.getImageData(0, 0, 1, 1).data[0] < 200;
-    } catch { filterSupport = false; }
-    return filterSupport;
-  }
 
-  async function finishOnDevice(canvas, filter, options, stem) {
-    let out = canvas;
-    if (filter) {
-      out = document.createElement("canvas");
-      out.width = canvas.width;
-      out.height = canvas.height;
-      const ctx = out.getContext("2d");
-      ctx.filter = filter;
-      ctx.drawImage(canvas, 0, 0);
-    }
-    const type = { jpg: "image/jpeg", webp: "image/webp" }[options.image_format] || "image/png";
-    const quality = 0.97 - ((Number(options.quality) - 14) / 16) * 0.25; // 14 → 0.97 … 30 → 0.72
-    const blob = await new Promise((resolve, reject) =>
-      out.toBlob((b) => (b ? resolve(b) : reject(new Error("toBlob failed"))), type, quality));
+
+  const outputType = (o) => ({ jpg: "image/jpeg", webp: "image/webp" }[o.image_format] || "image/png");
+  const outputQuality = (o) => 0.97 - ((Number(o.quality) - 14) / 16) * 0.25; // 14 → 0.97 … 30 → 0.72
+
+  function showLocalResult(result, stem) {
     // Some browsers (older Safari) can't write WebP and silently give PNG.
-    const ext = { "image/jpeg": "jpg", "image/webp": "webp" }[blob.type] || "png";
-
+    const ext = { "image/jpeg": "jpg", "image/webp": "webp" }[result.blob.type] || "png";
     if (localResultUrl) URL.revokeObjectURL(localResultUrl);
-    localResultUrl = URL.createObjectURL(blob);
+    localResultUrl = URL.createObjectURL(result.blob);
     $("start").disabled = false;
     showResult({
       url: localResultUrl,
       downloadUrl: localResultUrl,
       downloadName: `${stem}-videocraft.${ext}`,
       kind: "image",
-      info: { width: out.width, height: out.height },
+      info: { width: result.width, height: result.height },
     });
   }
 
@@ -743,9 +711,8 @@
         const blob = await pending;
         const guess = n < total ? n + 1 : null;
         pending = guess ? fetchFrame(frameUrl(guess), signal) : null; // download the next frame meanwhile
-        const res = await VCAI.upscale(blob, { model, scale: 2, signal });
-        const jpeg = await new Promise((ok, bad) => res.canvas.toBlob((b) => (b ? ok(b) : bad(new Error("toBlob"))), "image/jpeg", 0.92));
-        const put = await api("PUT", frameUrl(n), jpeg, signal);
+        const res = await VCAI.upscale(blob, { model, scale: 2, signal, finish: { type: "image/jpeg", quality: 0.92 } });
+        const put = await api("PUT", frameUrl(n), res.blob, signal);
         if (put.status !== 200) throw new UploadError(put.data.error || "تعذّر رفع إطار.");
         doneHere++;
         const done = put.data.done;
