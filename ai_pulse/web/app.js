@@ -151,6 +151,8 @@ async function load({ silent = false } = {}) {
     const data = await res.json();
     if (silent && data.updated === state.updated) return;
     const fresh = silent ? data.items.filter((i) => !state.items.some((o) => o.id === i.id)).length : 0;
+    const clipIds = (items) => items.filter((i) => i.kind === "clip").map((i) => i.id).join("|");
+    const clipsChanged = clipIds(data.items) !== clipIds(state.items);
     state.items = data.items;
     state.updated = data.updated;
     $("#updated").textContent = `آخر تحديث ${timeAgo(data.updated)}`;
@@ -159,7 +161,9 @@ async function load({ silent = false } = {}) {
       btn.textContent = `${fresh} منشور جديد ↑`;
       btn.hidden = false;
     }
-    renderChips(); renderNews(); renderClips();
+    renderChips(); renderNews();
+    // Rebuilding the clips would stop the video being watched and lose the scroll position.
+    if (state.view !== "clips" || clipsChanged) renderClips();
   } catch {
     if (!silent) $("#news").replaceChildren(el("p", { class: "state" }, "تعذّر تحميل الأخبار. حاول بعد شوي."));
   }
