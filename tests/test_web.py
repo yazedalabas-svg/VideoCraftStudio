@@ -485,6 +485,18 @@ class AIPulseIngestTests(unittest.TestCase):
         self.assertEqual([i["title"] for i in items], ["B", "A"])  # newest first
         self.assertNotIn("post", items[0])
 
+    def test_a_summary_failure_still_saves_the_fetched_items(self):
+        import json
+        import tempfile
+        from ai_pulse import ingest
+        fresh = [ingest.item("news", "Lab", "A", "https://x/a", "2026-10-14T10:00:00Z")]
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.object(ingest, "collect", return_value=(fresh, {})), \
+                unittest.mock.patch.object(ingest, "summarize", side_effect=TypeError("bad kwarg")):
+            path = Path(tmp) / "feed.json"
+            self.assertEqual(ingest.run(path)["total"], 1)
+            self.assertEqual(len(json.loads(path.read_text(encoding="utf-8"))["items"]), 1)
+
 
 @unittest.skipUnless(TestClient, "httpx not installed")
 class AIPulseRouteTests(unittest.TestCase):

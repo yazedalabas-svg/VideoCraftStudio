@@ -242,7 +242,12 @@ def run(feed_path: Path) -> dict:
 
     # Summarize new items first, then any older ones still missing a post.
     pending = new_items + [i for i in old.values() if not i.get("post") and i not in new_items]
-    for item_id, s in summarize(pending).items():
+    try:
+        summaries = summarize(pending)
+    except Exception as e:  # summaries are optional: never lose the fetched items over them
+        print(f"summaries skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        summaries = {}
+    for item_id, s in summaries.items():
         if item_id in old:
             old[item_id].update(s)
 
