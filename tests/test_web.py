@@ -444,5 +444,84 @@ class CancelTimingTests(unittest.TestCase):
             self.assertFalse((job.folder / "up").exists())
 
 
+RSS_SAMPLE = b"""<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>New model</title><link>https://example.com/a</link>
+<pubDate>Tue, 14 Oct 2026 10:00:00 GMT</pubDate><description>&lt;p&gt;Faster  and cheaper&lt;/p&gt;</description></item>
+</channel></rss>"""
+
+ATOM_SAMPLE = b"""<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+<entry><title>Paper</title><link href="https://example.com/b"/><updated>2026-10-13T08:00:00Z</updated></entry>
+</feed>"""
+
+
+class AIPulseIngestTests(unittest.TestCase):
+    def test_rss_and_atom_and_gzip(self):
+        import gzip
+        from ai_pulse import ingest
+        with unittest.mock.patch.object(ingest.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = gzip.compress(RSS_SAMPLE)
+            rss = ingest.from_rss("Lab", "https://example.com/rss")
+        self.assertEqual([(i["title"], i["date"], i["summary"]) for i in rss],
+                         [("New model", "2026-10-14T10:00:00Z", "Faster and cheaper")])
+        with unittest.mock.patch.object(ingest, "fetch", return_value=ATOM_SAMPLE):
+            atom = ingest.from_rss("Lab", "https://example.com/atom")
+        self.assertEqual((atom[0]["url"], atom[0]["date"]), ("https://example.com/b", "2026-10-13T08:00:00Z"))
+
+    def test_run_merges_without_duplicates_and_skips_summaries_without_a_key(self):
+        import json
+        import os
+        import tempfile
+        from ai_pulse import ingest
+        first = [ingest.item("news", "Lab", "A", "https://x/a", "2026-10-14T10:00:00Z")]
+        second = first + [ingest.item("news", "Lab", "B", "https://x/b", "2026-10-15T10:00:00Z")]
+        with tempfile.TemporaryDirectory() as tmp, unittest.mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            path = Path(tmp) / "feed.json"
+            with unittest.mock.patch.object(ingest, "collect", return_value=(first, {})):
+                self.assertEqual(ingest.run(path)["new"], 1)
+            with unittest.mock.patch.object(ingest, "collect", return_value=(second, {})):
+                report = ingest.run(path)
+            items = json.loads(path.read_text(encoding="utf-8"))["items"]
+        self.assertEqual((report["new"], report["total"]), (1, 2))
+        self.assertEqual([i["title"] for i in items], ["B", "A"])  # newest first
+        self.assertNotIn("post", items[0])
+
+
+@unittest.skipUnless(TestClient, "httpx not installed")
+class AIPulseRouteTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from web import app as webapp
+        from ai_pulse import ingest
+        self.ingest = ingest
+        self.client = TestClient(webapp.app)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = unittest.mock.patch.object(ingest, "RUNTIME_FEED", Path(self.tmp.name) / "feed.json")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_page_and_redirect(self):
+        self.assertEqual(self.client.get("/ai", follow_redirects=False).headers["location"], "/ai/")
+        page = self.client.get("/ai/")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("نبض AI", page.text)
+
+    def test_feed_serves_the_seed_and_refreshes_once_in_the_background(self):
+        with unittest.mock.patch.object(self.ingest, "_start_refresh") as start:
+            r = self.client.get("/ai/feed.json")
+            self.assertEqual(r.status_code, 200)
+            self.assertIn("items", r.json())
+            self.assertEqual(start.call_count, 1)
+            self.client.get("/ai/feed.json")  # a refresh is already running: don't start another
+            self.assertEqual(start.call_count, 1)
+        self.ingest._refresh_lock.release()  # the mocked refresh never ran to release it
+
+    def test_fresh_runtime_feed_is_served_without_refreshing(self):
+        self.ingest.RUNTIME_FEED.write_text('{"updated": "now", "items": []}', encoding="utf-8")
+        with unittest.mock.patch.object(self.ingest, "_start_refresh") as start:
+            self.assertEqual(self.client.get("/ai/feed.json").json()["updated"], "now")
+        start.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

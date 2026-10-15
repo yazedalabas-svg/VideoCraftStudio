@@ -3,6 +3,8 @@
 Routes
   GET  /                      the web app (web/static/index.html)
   GET  /about/                the original landing page (docs/)
+  GET  /ai/                   AI Pulse: AI news and clips feed (ai_pulse/)
+  GET  /ai/feed.json          the feed; refreshes itself in the background every hour
   GET  /healthz               health check for Render
   GET  /api/config            limits and options the UI should offer
   POST /api/uploads           start a resumable upload; ?filename=…&size=N
@@ -24,9 +26,11 @@ from urllib.parse import quote
 from starlette.applications import Starlette
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, RedirectResponse
+from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+
+from ai_pulse import ingest as ai_pulse
 
 from . import aivideo, jobs, media
 
@@ -68,6 +72,15 @@ async def index(_: Request) -> FileResponse:
 
 async def about_redirect(_: Request) -> RedirectResponse:
     return RedirectResponse("/about/")
+
+
+async def ai_redirect(_: Request) -> RedirectResponse:
+    return RedirectResponse("/ai/")
+
+
+async def ai_feed(_: Request) -> Response:
+    return Response(ai_pulse.current_feed(), media_type="application/json",
+                    headers={"Cache-Control": "no-cache"})
 
 
 async def healthz(_: Request) -> JSONResponse:
@@ -394,6 +407,9 @@ routes = [
     Route("/api/jobs/{job_id}/regular", ai_regular, methods=["POST"]),
     Route("/about", about_redirect),
     Mount("/about", StaticFiles(directory=ROOT / "docs", html=True), name="about"),
+    Route("/ai", ai_redirect),
+    Route("/ai/feed.json", ai_feed),  # before the mount, so the static seed file is never served
+    Mount("/ai", StaticFiles(directory=ROOT / "ai_pulse" / "web", html=True), name="ai"),
     Mount("/static", StaticFiles(directory=STATIC), name="static"),
 ]
 

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>نبض AI</title>
+<meta name="description" content="أخبار ومقاطع الذكاء الاصطناعي، تتحدث تلقائياً كل ساعة.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%236d4aff'/></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1 class="brand"><span class="dot" aria-hidden="true"></span>نبض AI</h1>
+  <span class="updated" id="updated" aria-live="polite"></span>
+</header>
+
+<button class="fresh" id="fresh" hidden>منشورات جديدة ↑</button>
+
+<main>
+  <!-- الأخبار: بطاقات مثل التغريدات -->
+  <section id="view-news" class="view" aria-label="الأخبار">
+    <nav class="chips" id="chips" aria-label="التصنيفات"></nav>
+    <div id="news" class="list" aria-busy="true">
+      <p class="state">جاري التحميل…</p>
+    </div>
+  </section>
+
+  <!-- المقاطع: تمرير عمودي -->
+  <section id="view-clips" class="view clips" aria-label="المقاطع" hidden></section>
+
+  <!-- قريباً -->
+  <section id="view-soon" class="view" hidden>
+    <p class="state">الحسابات والرسائل الخاصة في المرحلة الجاية.</p>
+  </section>
+</main>
+
+<nav class="bottom" aria-label="التنقل">
+  <button data-view="news" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"/></svg>الأخبار</button>
+  <button data-view="clips"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M11 9l4 3-4 3z"/></svg>مقاطع</button>
+  <button data-view="soon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v10H8l-4 4z"/></svg>الخاص</button>
+  <button data-view="soon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>حسابي</button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
