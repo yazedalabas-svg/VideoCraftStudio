@@ -113,6 +113,14 @@
 
     file = f;
     kind = isImage ? "image" : "video";
+    // Phones (gallery / cloud photos, iOS after the tab was in the background) often lose
+    // read access to a picked file a little later, and the upload then fails. Photos are
+    // small, so copy them into memory now, while access is still fresh.
+    if (isImage && f.size <= 150 * 1024 * 1024) {
+      f.arrayBuffer()
+        .then((buf) => { if (file === f) file = new File([buf], f.name, { type: f.type, lastModified: f.lastModified }); })
+        .catch(() => { /* keep the original; the upload retries the read */ });
+    }
     if (sourceUrl) URL.revokeObjectURL(sourceUrl);
     sourceUrl = URL.createObjectURL(f);
 
@@ -580,10 +588,14 @@
       let lost = false;
       while (offset < body.size) {
         let bytes;
-        try {
-          bytes = await body.slice(offset, offset + chunk).arrayBuffer();
-        } catch {
-          throw new UploadError("تعذّر قراءة الملف من جهازك. اختره مرة ثانية (ولو من «الملفات» بدل المعرض).");
+        for (let tries = 1; !bytes; tries++) {
+          try {
+            bytes = await body.slice(offset, offset + chunk).arrayBuffer();
+          } catch {
+            // A read can fail once while the phone brings the file back (cloud photo, app switch).
+            if (tries < 3) { await sleep(700 * tries, signal); continue; }
+            throw new UploadError("تعذّر قراءة الملف من جهازك. اختره مرة ثانية (ولو من «الملفات» بدل المعرض).");
+          }
         }
         const put = await api("PUT", `/api/uploads/${encodeURIComponent(id)}?offset=${offset}`, bytes, signal);
         if (put.status === 404) { lost = true; break; } // server restarted: start this file over
@@ -624,16 +636,18 @@
   async function poll() {
     clearTimeout(pollTimer);
     if (!jobId) return;
+    const id = jobId;
     let job;
     let response;
     try {
-      response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+      response = await fetch(`/api/jobs/${encodeURIComponent(id)}`, { cache: "no-store" });
       job = await response.json();
     } catch {
       // Network blip or the free instance waking up: keep waiting instead of failing.
-      pollTimer = setTimeout(poll, 4000);
+      if (id === jobId) pollTimer = setTimeout(poll, 4000);
       return;
     }
+    if (id !== jobId) return; // cancelled (or a new file started) while this reply was on its way
     if (!response.ok) {
       store.clear();
       // A job saved from an earlier visit has expired: start fresh without an error.

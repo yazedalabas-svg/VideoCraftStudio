@@ -1,0 +1,835 @@
+{
+ "updated": "2026-10-15T07:18:13Z",
+ "items": [
+  {
+   "id": "https://www.liquid.ai/blog/lfm2-5-24b-a2b",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "LFM2.5-24B-A2B: Built for fast on-device agents",
+   "url": "https://www.liquid.ai/blog/lfm2-5-24b-a2b",
+   "date": "2026-10-14T23:59:37Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://typesafe.ai/blog/jev-1-14",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "We’re releasing Jev 1.14.0 along with experimental features for dreamers",
+   "url": "https://typesafe.ai/blog/jev-1-14",
+   "date": "2026-10-14T21:11:03Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://startupfortune.com/banks-are-now-trying-to-offload-the-ai-data-center-debt-they-just-underwrote/",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Banks are now trying to offload the AI data center debt they just underwrote",
+   "url": "https://startupfortune.com/banks-are-now-trying-to-offload-the-ai-data-center-debt-they-just-underwrote/",
+   "date": "2026-10-14T18:32:52Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20606v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Modeling and Understanding Neural Weights of Humanoid Policies with Diffusion",
+   "url": "http://arxiv.org/abs/2610.20606v1",
+   "date": "2026-10-14T17:59:52Z",
+   "summary": "Recent advances in robot learning have driven rapid progress in humanoid control, enabling increasingly agile behaviors in the real world. However, humanoid control networks are typically obtained through conventional training procedures, while comparatively little attention has been given to directly modeling the distribution of their learned weights and generating functional networks in weight s",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20607v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Hierarchical Residual Policy Learning for Real-World Mobile Manipulation with Sparse Human Guidance",
+   "url": "http://arxiv.org/abs/2610.20607v1",
+   "date": "2026-10-14T17:59:52Z",
+   "summary": "Mobile Manipulation (MoMa) is a cornerstone of autonomous robotic systems, yet real-world fine-tuning remains a formidable challenge because of high-dimensional action spaces and intricate coupling between heterogeneous modules. In this paper, we propose HiRe-MoMa (Hierarchical Residual Mobile Manipulation), a systematic framework for stable and sample-efficient real-world fine-tuning of complex M",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20597v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Co-Evolving Acting and Forecasting for Language Agents",
+   "url": "http://arxiv.org/abs/2610.20597v1",
+   "date": "2026-10-14T17:59:28Z",
+   "summary": "Training language agents is bottlenecked by the high cost of long-horizon rollouts, yet standard agentic reinforcement learning (RL) learns only from a terminal scalar reward, leaving the supervision in intermediate steps largely unused. Prior work exploits this supervision through value targets that estimate per-step success probabilities or observation targets that fit environment response. Both",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20588v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Your Transformer Is Secretly Elastic",
+   "url": "http://arxiv.org/abs/2610.20588v1",
+   "date": "2026-10-14T17:58:08Z",
+   "summary": "Scaling up transformers has produced models with broad capabilities, deployed across heterogeneous hardware and fluctuating workloads. Yet, model families offer only a few fixed sizes (e.g., S, B, L), forcing users to commit to a model based on hardware and latency constraints. This rigidity is often suboptimal under varying query loads. We introduce a retraining-free method that elastifies pre-tr",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20587v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Price of Anarchy of First-Price Auctions in Agentic Markets",
+   "url": "http://arxiv.org/abs/2610.20587v1",
+   "date": "2026-10-14T17:57:57Z",
+   "summary": "An agentic market is a decentralized serving-time market where AI agents bid to claim each user prompt. An agent's bid is based on its expected value for the prompt, which is the expectation of the reward for its response minus its inference costs. First-price auctions (FPAs), in which the highest bidder pays its bid and receives the prompt, are a natural way to allocate prompts in such a market, ",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20586v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Continuum Attention",
+   "url": "http://arxiv.org/abs/2610.20586v1",
+   "date": "2026-10-14T17:57:40Z",
+   "summary": "We introduce Continuum Attention (CA), a causal Transformer attention operator that replaces discrete key and value lookup with integration over a continuous, piecewise linear memory curve. Each query induces an exponential relevance density along the curve. Integrating the density and interpolated values yields exact normalized attention from closed form exponential moments, including half token ",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20585v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Learnable Hodge-Laplacian Driven Mixture of Experts for Steady-PDE Surrogates on Coarse Unstructured Meshes",
+   "url": "http://arxiv.org/abs/2610.20585v1",
+   "date": "2026-10-14T17:57:24Z",
+   "summary": "Current approaches for steady partial differential equations surrogate models on unstructured meshes apply a single mixing mechanism to the whole solution. This paper proposes an architecture that partitions the solution among vanilla transformer experts, each focused on a different spectral scale. The partition is built from a discrete Hodge Laplacian $L_0=\\star_0^{-1} d_0^{\\top}\\star_1 d_0$, tha",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20584v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Player-1: Learning to Play from Synthetic Experience",
+   "url": "http://arxiv.org/abs/2610.20584v1",
+   "date": "2026-10-14T17:57:12Z",
+   "summary": "Computer-use agents have demonstrated strong capabilities in interpreting screens and executing keyboard and mouse actions. However, games, with their visually rich worlds and diverse mechanics, remain challenging and offer a demanding next step toward general digital control. Current game-agent learning pipelines often rely on large-scale demonstrations with limited coverage of dynamic game state",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20582v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "Latent Compaction with Test-Time Training",
+   "url": "http://arxiv.org/abs/2610.20582v1",
+   "date": "2026-10-14T17:57:01Z",
+   "summary": "Long contexts enlarge key--value (KV) caches, increasing memory use and attention costs during generation. Compressing these caches must preserve information for unseen questions. We introduce **Latent Compaction**, which learns a compact document-specific cache through test-time training. We initialize cache entries using reconstruction importance, teacher attention, and key-space diversity. Trai",
+   "video_id": null
+  },
+  {
+   "id": "http://arxiv.org/abs/2610.20576v1",
+   "kind": "research",
+   "source": "arXiv",
+   "title": "One Task, Many Interfaces: Simple Cross-Interface Consistency Training Improves LLM Agent Robustness",
+   "url": "http://arxiv.org/abs/2610.20576v1",
+   "date": "2026-10-14T17:56:06Z",
+   "summary": "Post-training binds the competence of an LLM agent to the interface it was trained on. Semantics-preserving perturbations of that interface, such as renaming an action or changing the notation, leave the underlying task unchanged yet make the agent worse at it. Scoring each sample independently means interface randomization only broadens this dependence from a single interface to the training inte",
+   "video_id": null
+  },
+  {
+   "id": "https://www.csoonline.com/article/4234854/ai-agents-arent-going-rogue-frontier-labs-are-skipping-security-basics.html",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Containment and monitoring failures are to blame for AI hacking reports: experts",
+   "url": "https://www.csoonline.com/article/4234854/ai-agents-arent-going-rogue-frontier-labs-are-skipping-security-basics.html",
+   "date": "2026-10-14T17:45:23Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://clova.email/",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Show HN: I wrote an email app that accepts only one sender per inbox",
+   "url": "https://clova.email/",
+   "date": "2026-10-14T17:00:59Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://theconsensus.dev/blog/2026/10/14/has-ai-tells.html?focus=1",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Has AI tells",
+   "url": "https://theconsensus.dev/blog/2026/10/14/has-ai-tells.html?focus=1",
+   "date": "2026-10-14T16:52:42Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/allenai/hiro-acev2",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "HiRO-ACEv2: Simulating extreme weather at 3 km resolution for a fraction of the cost",
+   "url": "https://huggingface.co/blog/allenai/hiro-acev2",
+   "date": "2026-10-14T16:12:42Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://popcar.bearblog.dev/ai-is-mass-decompiling-games-thats-both-awesome-and-scary/",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "AI is mass decompiling games. That's both awesome and scary",
+   "url": "https://popcar.bearblog.dev/ai-is-mass-decompiling-games-thats-both-awesome-and-scary/",
+   "date": "2026-10-14T14:47:44Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.reuters.com/business/asml-forecasts-q4-sales-above-expectations-ai-chip-demand-2026-10-14/",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "ASML's strong orders ease fears AI spending boom is running out of steam",
+   "url": "https://www.reuters.com/business/asml-forecasts-q4-sales-above-expectations-ai-chip-demand-2026-10-14/",
+   "date": "2026-10-14T14:38:55Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/amp-beyond-coding",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Amp puts AI agents to work beyond code with OpenAI models",
+   "url": "https://openai.com/index/amp-beyond-coding",
+   "date": "2026-10-14T12:00:00Z",
+   "summary": "See how Amp pushes the frontier of what agents can do with GPT-6 Astra, Ultrafast, GPT-Live-1, and Sign in with ChatGPT.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/sentinelone",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "SentinelOne cuts malware analysis from weeks to hours",
+   "url": "https://openai.com/index/sentinelone",
+   "date": "2026-10-14T12:00:00Z",
+   "summary": "With OpenAI Daybreak, SentinelOne cuts weeks of malware analysis to hours, creating capacity to investigate more threats.",
+   "video_id": null
+  },
+  {
+   "id": "https://swedenherald.com/article/tv4-postpones-the-challenge-until-2027-after-technical-failure-erases-edited-footage",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "TV4 postpones show after AI agent erases edited material",
+   "url": "https://swedenherald.com/article/tv4-postpones-the-challenge-until-2027-after-technical-failure-erases-edited-footage",
+   "date": "2026-10-14T10:28:26Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/third-moment-research",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "How Third Moment Research runs 10,000 agents for 36+ hours",
+   "url": "https://openai.com/index/third-moment-research",
+   "date": "2026-10-14T07:00:00Z",
+   "summary": "With GPT-6 Astra and GPT-6.1 Sol, Codex, and Daybreak for cybersecurity, this AI lab builds agents that focus for days and improve with use.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/block-ai-powered-security",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "How Block is building AI-powered security with OpenAI technology",
+   "url": "https://openai.com/index/block-ai-powered-security",
+   "date": "2026-10-14T07:00:00Z",
+   "summary": "Block is building AI-powered security with OpenAI. Its security team investigates threats faster and proposes patches in minutes.",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/on-device-ai-scam-detection-mddi/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Google DeepMind and Singapore Government collaborate to build fine-tuned AI model for scam detection",
+   "url": "https://deepmind.google/blog/on-device-ai-scam-detection-mddi/",
+   "date": "2026-10-14T02:00:14Z",
+   "summary": "Learn how Google DeepMind and GovTech Singapore uses lightweight on-device Gemma models to intercept conversational scams in private chats with zero cloud data egress.",
+   "video_id": null
+  },
+  {
+   "id": "https://blumify.io/people",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Show HN: I built a tool to track what AI leaders say and how their views change",
+   "url": "https://blumify.io/people",
+   "date": "2026-10-14T01:09:13Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/the-eus-next-chapter-in-ai-is-agentic",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "The EU’s next chapter in AI is agentic",
+   "url": "https://openai.com/index/the-eus-next-chapter-in-ai-is-agentic",
+   "date": "2026-10-14T00:00:00Z",
+   "summary": "New analysis shows how agentic AI adoption is growing across EU enterprises and small businesses—and where deeper use could unlock more value.",
+   "video_id": null
+  },
+  {
+   "id": "https://pulseos.finance",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Show HN: Pulse Local, a Mac budgeting app whose AI models run on your machine",
+   "url": "https://pulseos.finance",
+   "date": "2026-10-13T23:13:23Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/developing-gemini-4-argon-responsibly-and-safely/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Developing Gemini 4 Argon responsibly and safely",
+   "url": "https://deepmind.google/blog/developing-gemini-4-argon-responsibly-and-safely/",
+   "date": "2026-10-13T19:43:07Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/LiquidAI/lfm25-24b-a2b",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Run fast, private agents on-device with LFM2.5-24B-A2B",
+   "url": "https://huggingface.co/blog/LiquidAI/lfm25-24b-a2b",
+   "date": "2026-10-13T17:05:48Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/gemini-4-argon-for-robotics/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Gemini 4 Argon for Robotics",
+   "url": "https://deepmind.google/blog/gemini-4-argon-for-robotics/",
+   "date": "2026-10-13T16:01:58Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/introducing-gemini-4-argon/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Gemini 4 Argon: Built to solve your hardest problems",
+   "url": "https://deepmind.google/blog/introducing-gemini-4-argon/",
+   "date": "2026-10-13T16:01:52Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.sammystraus.com/#i-posted-to-hn-and-then-my-website-was-flooded-with-ai-bot-traffic",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "I posted to HN, and then my website was flooded with AI bot traffic",
+   "url": "https://www.sammystraus.com/#i-posted-to-hn-and-then-my-website-was-flooded-with-ai-bot-traffic",
+   "date": "2026-10-13T15:25:50Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://kylekukshtel.com/ai-harness-engineering-game-development-claude-code",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "How to engineer an AI harness for game development",
+   "url": "https://kylekukshtel.com/ai-harness-engineering-game-development-claude-code",
+   "date": "2026-10-13T14:14:23Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/higgsfield-longer-videos-voice",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Higgsfield takes AI video from 1 minute to over 10",
+   "url": "https://openai.com/index/higgsfield-longer-videos-voice",
+   "date": "2026-10-13T12:00:00Z",
+   "summary": "Higgsfield brings creators longer videos with GPT-6 Astra, precise visuals with GPT-Image-2.5, and a path to voice filmmaking with GPT-Live.",
+   "video_id": null
+  },
+  {
+   "id": "https://github.com/LargeModGames/spotatui",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Show HN: Spotatui, a Spotify TUI/GUI without web API rate limits",
+   "url": "https://github.com/LargeModGames/spotatui",
+   "date": "2026-10-13T11:32:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.theverge.com/ai-artificial-intelligence/1009802/character-ai-files-for-bankruptcy-disney",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Character.ai Files for Bankruptcy",
+   "url": "https://www.theverge.com/ai-artificial-intelligence/1009802/character-ai-files-for-bankruptcy-disney",
+   "date": "2026-10-13T11:24:08Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://pdftomp3.com/connect-ai/",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Show HN: Use your OpenAI subscription to create audiobooks",
+   "url": "https://pdftomp3.com/connect-ai/",
+   "date": "2026-10-13T10:08:34Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=z_sXLlLVUls",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "OpenAI’s New AI Is Doing Things We Barely Understand",
+   "url": "https://www.youtube.com/watch?v=z_sXLlLVUls",
+   "date": "2026-10-13T08:56:12Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers 📝 The papers are available here: https://openai.com/index/sharing-ai-progress-in-mathematics/ https://github.com/openai/math 🙏 We would like to thank our generous Patreon supporters who make Two Minute Papers possible: Adam Bridges, B Shang, Carlos Galarza, Christian Ahlin, Eric Tyson, Juan Benet, Lukas Biewald, Mic",
+   "video_id": "z_sXLlLVUls"
+  },
+  {
+   "id": "https://github.com/composo-ai/DishwasherBench",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "DishwasherBench – Can Frontier Models Stack a Dishwasher?",
+   "url": "https://github.com/composo-ai/DishwasherBench",
+   "date": "2026-10-13T08:24:06Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://blog.character.ai/an-update-on-character-ai/",
+   "kind": "news",
+   "source": "Hacker News",
+   "title": "Character.ai has initiated voluntary Chapter 11 bankruptcy",
+   "url": "https://blog.character.ai/an-update-on-character-ai/",
+   "date": "2026-10-13T07:28:34Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=4fLVq6HJsKc",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "DeepSeek Solved AI’s Memory Problem",
+   "url": "https://www.youtube.com/watch?v=4fLVq6HJsKc",
+   "date": "2026-10-11T16:53:17Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers 📝 The DeepSeek OCR paper is available here: https://github.com/deepseek-ai/DeepSeek-OCR 🙏 We would like to thank our generous Patreon supporters who make Two Minute Papers possible: Adam Bridges, B Shang, Carlos Galarza, Christian Ahlin, Eric Tyson, Juan Benet, Lukas Biewald, Michael Tedder, Owen Skarpness, Ryan Sta",
+   "video_id": "4fLVq6HJsKc"
+  },
+  {
+   "id": "https://openai.com/index/asana-browser-agent",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Asana cuts model costs 76x in browser tests with GPT-6.1 Sol",
+   "url": "https://openai.com/index/asana-browser-agent",
+   "date": "2026-10-09T07:00:00Z",
+   "summary": "Using GPT-6 Astra in Codex, Asana made its browser agent 76x cheaper and 5x faster in tests to offer customers more capable models.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/sophos",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Sophos cuts threat investigation time by 96% with OpenAI Daybreak",
+   "url": "https://openai.com/index/sophos",
+   "date": "2026-10-09T07:00:00Z",
+   "summary": "Discover how Sophos uses OpenAI’s Daybreak to cut cyber-threat investigation time by 96% and automate 52% of MDR cases while preserving human oversight.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/oracle",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "How Oracle turns days of work into minutes with ChatGPT and Codex",
+   "url": "https://openai.com/index/oracle",
+   "date": "2026-10-08T16:00:00Z",
+   "summary": "Across recruiting, engineering, and operations, Oracle turns specialist knowledge into fast, repeatable workflows with ChatGPT Work and Codex.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/pollo-ai",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Pollo AI turns creative ideas into campaigns with OpenAI",
+   "url": "https://openai.com/index/pollo-ai",
+   "date": "2026-10-08T12:00:00Z",
+   "summary": "With GPT-5.6, GPT-6 Astra, and GPT‑Image‑2.5, Pollo AI helps creators turn bold ideas into detailed images and cinematic video ads.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/legalon-halves-codex-costs",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "LegalOn halves Codex costs while maintaining development speed",
+   "url": "https://openai.com/index/legalon-halves-codex-costs",
+   "date": "2026-10-08T12:00:00Z",
+   "summary": "LegalOn cut estimated daily Codex costs by 65% while maintaining development speed. It matched Astra, Sol, and Luna to tasks and managed budgets strategically.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/disrupting-ai-enabled-false-front-operations",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Disrupting AI-enabled “false front” operations",
+   "url": "https://openai.com/index/disrupting-ai-enabled-false-front-operations",
+   "date": "2026-10-08T00:00:00Z",
+   "summary": "OpenAI disrupted two AI-enabled influence operations that used false-front journalists and a think tank to spread geopolitical messaging.",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/building-with-ml-intern",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "The model that didn't exist, so you made it yourself",
+   "url": "https://huggingface.co/blog/building-with-ml-intern",
+   "date": "2026-10-08T00:00:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=Wkaw03p3BrM",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "DeepMind's New AI Just Cracked The Code Of Life",
+   "url": "https://www.youtube.com/watch?v=Wkaw03p3BrM",
+   "date": "2026-10-07T13:29:33Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers Thank you Google DeepMind for the invite. 📝 AlphaGenome Atlas is available here: https://deepmind.google/blog/alphagenome-atlas-a-predictive-map-of-every-possible-dna-letter-change-in-the-human-genome/ https://blog.google/innovation-and-ai/models-and-research/google-deepmind/alphagenome-atlas/ 🙏 We would like to tha",
+   "video_id": "Wkaw03p3BrM"
+  },
+  {
+   "id": "https://huggingface.co/blog/tiiuae/falcon-asr",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Introducing Falcon ASR",
+   "url": "https://huggingface.co/blog/tiiuae/falcon-asr",
+   "date": "2026-10-07T13:21:03Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/nvidia/nemotron-ioi-and-imo-2026",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "One Model Family, Two Gold-Level Results: Fine-Tuning Nemotron for IOI and IMO",
+   "url": "https://huggingface.co/blog/nvidia/nemotron-ioi-and-imo-2026",
+   "date": "2026-10-07T12:45:31Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/teens-learn-and-plan",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Helping teens learn, plan, and shape the future of AI",
+   "url": "https://openai.com/index/teens-learn-and-plan",
+   "date": "2026-10-07T12:00:00Z",
+   "summary": "College Planner is coming to ChatGPT for Teens to help students manage college applications, alongside new flashcards, quizzes, and a teen AI council.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/radisson",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "Radisson Hotel Group brings hotel discovery into ChatGPT",
+   "url": "https://openai.com/index/radisson",
+   "date": "2026-10-07T07:00:00Z",
+   "summary": "Radisson partnered with Accenture to build a ChatGPT plugin using OpenAI technology, helping travelers find, compare, and book hotels while planning their trips.",
+   "video_id": null
+  },
+  {
+   "id": "https://openai.com/index/gpt-6-for-everyone",
+   "kind": "news",
+   "source": "OpenAI",
+   "title": "GPT-6 and Intelligent UI for everyone",
+   "url": "https://openai.com/index/gpt-6-for-everyone",
+   "date": "2026-10-07T00:00:00Z",
+   "summary": "GPT‑6 is rolling out globally in ChatGPT with Intelligent UI, delivering faster responses with visuals and interactive experiences you can explore and use directly.",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/embeddinggemma-2-an-open-lightweight-multimodal-embedding-model/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "EmbeddingGemma 2: an open, lightweight multimodal embedding model",
+   "url": "https://deepmind.google/blog/embeddinggemma-2-an-open-lightweight-multimodal-embedding-model/",
+   "date": "2026-10-06T19:57:04Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=ZHVNTTKu9fU",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "The Billion Dollar AI Advantage Is Disappearing",
+   "url": "https://www.youtube.com/watch?v=ZHVNTTKu9fU",
+   "date": "2026-10-05T09:53:12Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers 📝 Sonnet 5.5: https://www.anthropic.com/claude-sonnet-5-5 🙏 We would like to thank our generous Patreon supporters who make Two Minute Papers possible: Adam Bridges, B Shang, Carlos Galarza, Christian Ahlin, Eric Tyson, Juan Benet, Lukas Biewald, Michael Tedder, Owen Skarpness, Ryan Stankye, Shawn Becker, Steef, Tar",
+   "video_id": "ZHVNTTKu9fU"
+  },
+  {
+   "id": "https://huggingface.co/blog/microsoft/thinkingbox",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "The Agent Said It Was Done. The Database Disagreed.",
+   "url": "https://huggingface.co/blog/microsoft/thinkingbox",
+   "date": "2026-10-03T22:56:48Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/ServiceNow-AI/autosynthdata",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "AutoSynthData: Generating Training Data for Enterprise Agents",
+   "url": "https://huggingface.co/blog/ServiceNow-AI/autosynthdata",
+   "date": "2026-10-02T04:01:31Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/gemini-4-argon-our-next-era-of-frontier-intelligence/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Gemini 4 Argon: our next era of frontier intelligence",
+   "url": "https://deepmind.google/blog/gemini-4-argon-our-next-era-of-frontier-intelligence/",
+   "date": "2026-09-30T20:01:45Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/introducing-synthid-bio/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Introducing SynthID Bio",
+   "url": "https://deepmind.google/blog/introducing-synthid-bio/",
+   "date": "2026-09-30T15:03:07Z",
+   "summary": "Proof of concept for watermarking AI-generated proteins while preserving biological function.",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/open-tts-leaderboard",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Open TTS Leaderboard: Scalable Evaluation for Multilingual Text-to-Speech and Voice Cloning",
+   "url": "https://huggingface.co/blog/open-tts-leaderboard",
+   "date": "2026-09-30T00:00:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/MultiverseComputingCAI/getting-the-source-right-not-just-the-fact-source",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Getting the Source Right, Not Just the Fact: Source-Aware Verification for MCP Agents",
+   "url": "https://huggingface.co/blog/MultiverseComputingCAI/getting-the-source-right-not-just-the-fact-source",
+   "date": "2026-09-29T13:07:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/Hcompany/holo4",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Holo4: powering generalist computer-use agents",
+   "url": "https://huggingface.co/blog/Hcompany/holo4",
+   "date": "2026-09-28T09:44:05Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/rl-environments",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Welcome RL Environments to the hub",
+   "url": "https://huggingface.co/blog/rl-environments",
+   "date": "2026-09-28T00:00:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/introducing-gemini-38-live-with-live-avatar/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Introducing Gemini 3.8 Live with Live Avatar",
+   "url": "https://deepmind.google/blog/introducing-gemini-38-live-with-live-avatar/",
+   "date": "2026-09-24T16:20:39Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=SA9kdAX2Zj0",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "Claude Opus 5.5 AI: An Incredible Leap Forward",
+   "url": "https://www.youtube.com/watch?v=SA9kdAX2Zj0",
+   "date": "2026-09-24T08:40:55Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers Note: in the walking creatures experiment, Astra used a simplified model and was unable to implement the correct one. Things did not improve after simulating it for more generations. Claude Opus 5.5: https://www.anthropic.com/claude-opus-5-5 Walking creatures video and paper: https://www.youtube.com/watch?v=kQ2bqz3H",
+   "video_id": "SA9kdAX2Zj0"
+  },
+  {
+   "id": "https://deepmind.google/blog/advancing-private-ai-compute-with-secure-server-side-memory/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Advancing Private AI Compute with secure, server-side memory",
+   "url": "https://deepmind.google/blog/advancing-private-ai-compute-with-secure-server-side-memory/",
+   "date": "2026-09-23T16:00:57Z",
+   "summary": "Introducing private, server-side memory to Private AI Compute for personal AI.",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/say-hello-to-gemini-38-text-to-speech/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Gemini 3.8 text-to-speech says hello",
+   "url": "https://deepmind.google/blog/say-hello-to-gemini-38-text-to-speech/",
+   "date": "2026-09-23T15:25:14Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=qBBRRsH0rQc",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "Yes, Jev Is Insane, But There's A Catch",
+   "url": "https://www.youtube.com/watch?v=qBBRRsH0rQc",
+   "date": "2026-09-22T09:32:13Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers 📝 Jev: https://typesafe.ai/blog/introducing-system-one-models-and-jev Full song: https://www.youtube.com/watch?v=4RtUJkjrKMI Previous papers, implementations, models: https://huggingface.co/convaiinnovations/laya https://arxiv.org/abs/2503.23303 https://huggingface.co/DeepMostInnovations/sales-conversion-model-reinf",
+   "video_id": "qBBRRsH0rQc"
+  },
+  {
+   "id": "https://huggingface.co/blog/evaleval-aisi",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "How UK AISI and EvalEval Are Making Benchmark Results Reproducible",
+   "url": "https://huggingface.co/blog/evaleval-aisi",
+   "date": "2026-09-22T00:00:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/transformers-llama-cpp-quants",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Transformers now runs llama.cpp quants",
+   "url": "https://huggingface.co/blog/transformers-llama-cpp-quants",
+   "date": "2026-09-22T00:00:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/omlx",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "Jun Kim, oMLX creator and maintainer, joins Hugging Face to support the MLX community",
+   "url": "https://huggingface.co/blog/omlx",
+   "date": "2026-09-22T00:00:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://huggingface.co/blog/tokenizers-v1",
+   "kind": "news",
+   "source": "Hugging Face",
+   "title": "tokenizers v1: encode, decode and scaling, measured",
+   "url": "https://huggingface.co/blog/tokenizers-v1",
+   "date": "2026-09-21T00:00:00Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=vIHw_2VjSUw",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "DeepSeek’s Insane New Architecture",
+   "url": "https://www.youtube.com/watch?v=vIHw_2VjSUw",
+   "date": "2026-09-18T07:03:46Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers 📝 The DeepSeek V4.1 Flash paper is available here: https://www.deepseek.com/en/news/deepseek-v4-1-flash/ Erratum: Opus 5.1 label at 3:23 should have been Opus 5. Apologies! Sources: https://x.com/flowith/status/2099446892174406055/video/1 https://x.com/loktar00/status/2097761803291726137 https://x.com/loktar00/statu",
+   "video_id": "vIHw_2VjSUw"
+  },
+  {
+   "id": "https://deepmind.google/blog/introducing-gemini-3-8-live-and-3-8-live-extended-thinking/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Introducing Gemini 3.8 Live and 3.8 Live Extended Thinking",
+   "url": "https://deepmind.google/blog/introducing-gemini-3-8-live-and-3-8-live-extended-thinking/",
+   "date": "2026-09-15T17:05:57Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=YoEWjZSwoys",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "Claude Is Now Leaving Invisible Fingerprints In Its Text",
+   "url": "https://www.youtube.com/watch?v=YoEWjZSwoys",
+   "date": "2026-09-15T10:12:34Z",
+   "summary": "❤️ Check out Weights & Biases and sign up for a free demo here: https://wandb.me/papers 📝 The papers and sources are available here: https://proceedings.mlr.press/v202/kirchenbauer23a.html https://www.nature.com/articles/s41586-024-08025-4 https://www.anthropic.com/news/claude-text-watermark 🙏 We would like to thank our generous Patreon supporters who make Two Minute Papers possible: Adam Bridges,",
+   "video_id": "YoEWjZSwoys"
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=mOvtumfyjCs",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "I Never Thought I’d See This Happen",
+   "url": "https://www.youtube.com/watch?v=mOvtumfyjCs",
+   "date": "2026-09-10T08:47:23Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers 📝 The Navier-Stokes solution paper is available here: https://openai.com/index/navier-stokes-solution/ My fluid simulations and papers: https://users.cg.tuwien.ac.at/zsolnai/gfx/fluid_control_msc_thesis/ https://users.cg.tuwien.ac.at/zsolnai/gfx/real_time_fluid_control_eg/ The flow from simulation to reality: https:",
+   "video_id": "mOvtumfyjCs"
+  },
+  {
+   "id": "https://deepmind.google/blog/alphagenome-atlas-a-predictive-map-of-every-possible-dna-letter-change-in-the-human-genome/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "AlphaGenome Atlas: A predictive map of every possible DNA letter change in the human genome",
+   "url": "https://deepmind.google/blog/alphagenome-atlas-a-predictive-map-of-every-possible-dna-letter-change-in-the-human-genome/",
+   "date": "2026-09-08T14:00:15Z",
+   "summary": "AlphaGenome Atlas maps the molecular effects of 9 billion single-letter DNA variants across the human genome.",
+   "video_id": null
+  },
+  {
+   "id": "https://www.youtube.com/watch?v=eVBJIUxv8N8",
+   "kind": "clip",
+   "source": "Two Minute Papers",
+   "title": "GPT-6 Astra Changes Everything",
+   "url": "https://www.youtube.com/watch?v=eVBJIUxv8N8",
+   "date": "2026-09-08T08:24:27Z",
+   "summary": "❤️ Check out Lambda here and sign up for their GPU Cloud: https://lambda.ai/papers Links / sources: Honey sim: search for \"Variational Stokes: A Unified Pressure-Viscosity Solver for Accurate Viscous Liquids\" here: https://cs.uwaterloo.ca/~c2batty/ https://x.com/mindblown_ai/status/2095661874037813298?s=20 https://x.com/aollivier82/status/2096226819401801896?s=46 https://x.com/sahilexec/status/209",
+   "video_id": "eVBJIUxv8N8"
+  },
+  {
+   "id": "https://deepmind.google/blog/introducing-weathernext-3-our-most-advanced-and-accurate-global-weather-ai-model/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Introducing WeatherNext 3, our most advanced and accurate global weather AI model",
+   "url": "https://deepmind.google/blog/introducing-weathernext-3-our-most-advanced-and-accurate-global-weather-ai-model/",
+   "date": "2026-09-03T15:02:08Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/proactive-cyber-defense-for-governments-and-enterprises/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Proactive cyber defense for governments and enterprises",
+   "url": "https://deepmind.google/blog/proactive-cyber-defense-for-governments-and-enterprises/",
+   "date": "2026-09-02T16:24:24Z",
+   "summary": "",
+   "video_id": null
+  },
+  {
+   "id": "https://deepmind.google/blog/introducing-gemini-3-8-flash-and-38-flash-cyber/",
+   "kind": "news",
+   "source": "Google DeepMind",
+   "title": "Introducing Gemini 3.8 Flash and 3.8 Flash Cyber",
+   "url": "https://deepmind.google/blog/introducing-gemini-3-8-flash-and-38-flash-cyber/",
+   "date": "2026-09-02T16:18:31Z",
+   "summary": "",
+   "video_id": null
+  }
+ ]
+}

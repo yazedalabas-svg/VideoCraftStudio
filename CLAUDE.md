@@ -13,6 +13,9 @@
   - `static/` UI: `app.js` (flow), `ai.js` + `ai-worker.js` (in-browser Real-ESRGAN / Real-CUGAN on the visitor's GPU via TF.js, run in a Web Worker with a watchdog),
     `viewer.js` (zoom/pan + before/after for images and synced videos), `models/` (TF.js weights, licenses in `models/NOTICE.md`).
 - `docs/` — landing page, served at `/about/`.
+- `ai_pulse/` — "نبض AI", a separate AI news + clips feed served at `/ai/`. `ingest.py` pulls RSS / Hacker News / arXiv / YouTube
+  and refreshes `/ai/feed.json` in a background thread every hour (temp dir, no commits); `web/` is its static page.
+  Arabic summaries only when `ANTHROPIC_API_KEY` is set on Render.
 - `server.py` — starts the web app on `$PORT`.
 - `deploy/render_start/` — provides a `0` command because the Render service's Start Command is `0`. Keep it.
 

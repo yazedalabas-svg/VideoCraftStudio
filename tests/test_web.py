@@ -353,6 +353,187 @@ class ResumableUploadTests(unittest.TestCase):
         huge = 10 * 1024 * 1024 * 1024
         self.assertEqual(self.client.post(f"/api/uploads?filename=a.mp4&size={huge}").status_code, 413)
 
+    def test_size_limit_message_uses_the_right_unit(self):
+        huge = 10 * 1024 * 1024 * 1024
+        with unittest.mock.patch.object(jobs, "MAX_UPLOAD_MB", 500):
+            r = self.client.post(f"/api/uploads?filename=a.mp4&size={huge}")
+        self.assertIn("500 ميغابايت", r.json()["error"])  # was "0 غيغابايت"
+        with unittest.mock.patch.object(jobs, "MAX_UPLOAD_MB", 8192):
+            r = self.client.post(f"/api/uploads?filename=a.mp4&size={huge}")
+        self.assertIn("8 غيغابايت", r.json()["error"])
+
+    def test_oversized_chunk_and_frame_are_refused(self):
+        uid = self._start()
+        with unittest.mock.patch.object(self.webapp, "MAX_CHUNK", 100):
+            r = self.client.put(f"/api/uploads/{uid}?offset=0", content=self.payload[:101])
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.webapp.UPLOADS[uid]["source"].stat().st_size, 0)
+        job = self._ai_job()
+        with unittest.mock.patch.object(self.webapp, "MAX_FRAME_BYTES", 10):
+            r = self.client.put(f"/api/jobs/{job.id}/frames/1", content=b"\xff\xd8" + b"x" * 20)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(job.frames_done, set())
+
+    def test_cancel_while_the_browser_upscales(self):
+        job = self._ai_job()
+        (job.folder / "before.mp4").write_bytes(b"x")
+        job.before = job.folder / "before.mp4"
+        r = self.client.post(f"/api/jobs/{job.id}/cancel")
+        self.assertEqual(r.json()["status"], "cancelled")  # was left "awaiting_ai"
+        self.assertFalse(job.source.exists())
+        self.assertFalse((job.folder / "frames").exists())
+        self.assertFalse((job.folder / "up").exists())
+        self.assertFalse(job.before.exists())
+        self.assertEqual(self.client.get(f"/api/jobs/{job.id}/frames/1").status_code, 404)
+
+
+class CancelTimingTests(unittest.TestCase):
+    """A cancel must stop the job even when it arrives before FFmpeg has started."""
+
+    def _job(self, folder):
+        manager = jobs.JobManager.__new__(jobs.JobManager)  # no worker threads
+        job = jobs.Job(id="j", filename="a.mp4", folder=Path(folder), source=Path(folder) / "source.mp4", options={})
+        return manager, job
+
+    def test_cancel_before_the_encode_starts_skips_it(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            manager, job = self._job(tmp)
+            job.status = "running"
+            manager.cancel(job)  # e.g. while the file was still being probed: nothing to kill yet
+            with unittest.mock.patch("web.jobs.subprocess.Popen") as popen:
+                manager._execute(job, ["ffmpeg", "-i", "x"], 10.0)
+            popen.assert_not_called()
+
+    def test_cancel_racing_the_start_kills_the_new_process(self):
+        import sys
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            manager, job = self._job(tmp)
+            real_popen = jobs.subprocess.Popen
+
+            def popen(*args, **kwargs):  # the cancel lands right as the process starts
+                proc = real_popen([sys.executable, "-c", "import time; time.sleep(30)"], **{
+                    k: v for k, v in kwargs.items() if k in ("stdin", "stdout", "stderr", "text", "encoding", "errors")})
+                job.cancel_requested = True
+                return proc
+
+            with unittest.mock.patch("web.jobs.subprocess.Popen", popen):
+                started = __import__("time").time()
+                manager._execute(job, ["ffmpeg"], 10.0)
+            self.assertLess(__import__("time").time() - started, 10)
+            self.assertTrue(job.cancel_requested)
+
+    def test_assembly_frees_the_frames(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            manager, job = self._job(tmp)
+            for sub in ("frames", "up"):
+                (job.folder / sub).mkdir()
+                (job.folder / sub / "000001.jpg").write_bytes(b"x")
+            job.ai = {"fps": 15, "width": 8, "height": 8, "frames": 1, "out_width": 16, "out_height": 16}
+
+            def fake_execute(job, command, duration, span=(0.0, 1.0)):
+                (job.folder / "result.mp4").write_bytes(b"video")
+
+            with unittest.mock.patch.object(manager, "_execute", fake_execute), \
+                    unittest.mock.patch("web.aivideo.find_binary", return_value="ffmpeg"):
+                manager._assemble(job)
+            self.assertEqual(job.status, "done")
+            self.assertFalse((job.folder / "frames").exists())
+            self.assertFalse((job.folder / "up").exists())
+
+
+RSS_SAMPLE = b"""<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>New model</title><link>https://example.com/a</link>
+<pubDate>Tue, 14 Oct 2026 10:00:00 GMT</pubDate><description>&lt;p&gt;Faster  and cheaper&lt;/p&gt;</description></item>
+</channel></rss>"""
+
+ATOM_SAMPLE = b"""<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+<entry><title>Paper</title><link href="https://example.com/b"/><updated>2026-10-13T08:00:00Z</updated></entry>
+</feed>"""
+
+
+class AIPulseIngestTests(unittest.TestCase):
+    def test_rss_and_atom_and_gzip(self):
+        import gzip
+        from ai_pulse import ingest
+        with unittest.mock.patch.object(ingest.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = gzip.compress(RSS_SAMPLE)
+            rss = ingest.from_rss("Lab", "https://example.com/rss")
+        self.assertEqual([(i["title"], i["date"], i["summary"]) for i in rss],
+                         [("New model", "2026-10-14T10:00:00Z", "Faster and cheaper")])
+        with unittest.mock.patch.object(ingest, "fetch", return_value=ATOM_SAMPLE):
+            atom = ingest.from_rss("Lab", "https://example.com/atom")
+        self.assertEqual((atom[0]["url"], atom[0]["date"]), ("https://example.com/b", "2026-10-13T08:00:00Z"))
+
+    def test_run_merges_without_duplicates_and_skips_summaries_without_a_key(self):
+        import json
+        import os
+        import tempfile
+        from ai_pulse import ingest
+        first = [ingest.item("news", "Lab", "A", "https://x/a", "2026-10-14T10:00:00Z")]
+        second = first + [ingest.item("news", "Lab", "B", "https://x/b", "2026-10-15T10:00:00Z")]
+        with tempfile.TemporaryDirectory() as tmp, unittest.mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            path = Path(tmp) / "feed.json"
+            with unittest.mock.patch.object(ingest, "collect", return_value=(first, {})):
+                self.assertEqual(ingest.run(path)["new"], 1)
+            with unittest.mock.patch.object(ingest, "collect", return_value=(second, {})):
+                report = ingest.run(path)
+            items = json.loads(path.read_text(encoding="utf-8"))["items"]
+        self.assertEqual((report["new"], report["total"]), (1, 2))
+        self.assertEqual([i["title"] for i in items], ["B", "A"])  # newest first
+        self.assertNotIn("post", items[0])
+
+    def test_a_summary_failure_still_saves_the_fetched_items(self):
+        import json
+        import tempfile
+        from ai_pulse import ingest
+        fresh = [ingest.item("news", "Lab", "A", "https://x/a", "2026-10-14T10:00:00Z")]
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.object(ingest, "collect", return_value=(fresh, {})), \
+                unittest.mock.patch.object(ingest, "summarize", side_effect=TypeError("bad kwarg")):
+            path = Path(tmp) / "feed.json"
+            self.assertEqual(ingest.run(path)["total"], 1)
+            self.assertEqual(len(json.loads(path.read_text(encoding="utf-8"))["items"]), 1)
+
+
+@unittest.skipUnless(TestClient, "httpx not installed")
+class AIPulseRouteTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from web import app as webapp
+        from ai_pulse import ingest
+        self.ingest = ingest
+        self.client = TestClient(webapp.app)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = unittest.mock.patch.object(ingest, "RUNTIME_FEED", Path(self.tmp.name) / "feed.json")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_page_and_redirect(self):
+        self.assertEqual(self.client.get("/ai", follow_redirects=False).headers["location"], "/ai/")
+        page = self.client.get("/ai/")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("نبض AI", page.text)
+
+    def test_feed_serves_the_seed_and_refreshes_once_in_the_background(self):
+        with unittest.mock.patch.object(self.ingest, "_start_refresh") as start:
+            r = self.client.get("/ai/feed.json")
+            self.assertEqual(r.status_code, 200)
+            self.assertIn("items", r.json())
+            self.assertEqual(start.call_count, 1)
+            self.client.get("/ai/feed.json")  # a refresh is already running: don't start another
+            self.assertEqual(start.call_count, 1)
+        self.ingest._refresh_lock.release()  # the mocked refresh never ran to release it
+
+    def test_fresh_runtime_feed_is_served_without_refreshing(self):
+        self.ingest.RUNTIME_FEED.write_text('{"updated": "now", "items": []}', encoding="utf-8")
+        with unittest.mock.patch.object(self.ingest, "_start_refresh") as start:
+            self.assertEqual(self.client.get("/ai/feed.json").json()["updated"], "now")
+        start.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
