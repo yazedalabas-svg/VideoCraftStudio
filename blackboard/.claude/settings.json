@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__blackboard__whoami",
+      "mcp__blackboard__list_courses",
+      "mcp__blackboard__get_upcoming",
+      "mcp__blackboard__get_assignment_details",
+      "mcp__blackboard__get_announcements",
+      "mcp__blackboard__browse_course_content",
+      "mcp__blackboard__find_study_materials",
+      "mcp__blackboard__search_course_materials",
+      "mcp__blackboard__read_course_file",
+      "Skill(bb-daily)",
+      "Read(./**)",
+      "Edit(./reports/**)"
+    ],
+    "deny": [
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "Read(./.env)",
+      "Read(./.venv/**)",
+      "Edit(./.env)",
+      "Edit(./.claude/**)",
+      "Edit(./bb.py)",
+      "Edit(./.mcp.json)",
+      "Edit(./drafts/**)"
+    ]
+  }
+}
