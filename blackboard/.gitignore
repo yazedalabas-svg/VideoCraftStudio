@@ -1,0 +1,9 @@
+# secrets and machine-specific files
+.env
+.mcp.json
+.venv/
+__pycache__/
+# personal study data stays on this computer
+reports/
+drafts/
+bb-daily.log
